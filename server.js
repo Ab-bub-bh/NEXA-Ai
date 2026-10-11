@@ -697,7 +697,7 @@ app.post("/vscode", (req, res) => {
 
 
 app.get("/speak", (res) => {
-  res.sendFile(path.join(__dirname, "Voice.html"));
+  res.sendFile(path.join(__dirname, "voice.html"));
 });
 
 app.get("/chat", (res) => {
