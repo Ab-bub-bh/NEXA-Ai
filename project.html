@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nexa AI - Professional Voice Assistant</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+        }
+
+        :root {
+            --primary: #0066FF;
+            --primary-glow: #0066FF;
+            --secondary: #00D4AA;
+            --accent: #FF6B35;
+            --dark: #0A0F1C;
+            --darker: #050811;
+            --light: #F0F4FF;
+            --gray: #8B9BBE;
+            --card-bg: rgba(15, 23, 42, 0.85);
+            --glass-border: rgba(255, 255, 255, 0.12);
+            --gold: #FFD700;
+        }
+
+        body {
+            background: linear-gradient(135deg, var(--darker), var(--dark));
+            color: var(--light);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            overflow-x: hidden;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 320px 1fr 320px;
+            gap: 40px;
+            width: 100%;
+            max-width: 1600px;
+            height: 95vh;
+            align-items: stretch;
+        }
+
+        /* Premium Glass Morphism Pillars */
+        .pillar {
+            background: linear-gradient(135deg, 
+                rgba(255, 255, 255, 0.08), 
+                rgba(255, 255, 255, 0.02));
+            backdrop-filter: blur(25px);
+            border-radius: 24px;
+            padding: 30px;
+            border: 1px solid var(--glass-border);
+            display: flex;
+            flex-direction: column;
+            box-shadow: 
+                0 25px 50px rgba(0, 0, 0, 0.25),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .pillar::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, 
+                transparent, 
+                var(--gold), 
+                transparent);
+        }
+
+        .pillar-title {
+            font-size: 0.95rem;
+            color: var(--gold);
+            margin-bottom: 30px;
+            text-align: center;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            position: relative;
+        }
+
+        .pillar-title::after {
+            content: '';
+            position: absolute;
+            bottom: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 40px;
+            height: 2px;
+            background: var(--gold);
+            border-radius: 2px;
+        }
+
+        /* Weather Section - Premium */
+        .weather-main {
+            text-align: center;
+            margin-bottom: 35px;
+        }
+
+        .weather-icon {
+            font-size: 4.5rem;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #FFD700, #FFA500);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            filter: drop-shadow(0 0 20px rgba(255, 215, 0, 0.3));
+        }
+
+        .temperature {
+            font-size: 4rem;
+            font-weight: 300;
+            margin-bottom: 8px;
+            background: linear-gradient(135deg, var(--light), var(--gray));
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -1px;
+        }
+
+        .weather-desc {
+            font-size: 1.1rem;
+            color: var(--gray);
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+
+        .weather-details {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .weather-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s ease;
+        }
+
+        .weather-item:hover {
+            border-bottom-color: rgba(255, 255, 255, 0.2);
+            transform: translateX(5px);
+        }
+
+        .weather-item:last-child {
+            border-bottom: none;
+        }
+
+        .weather-label {
+            color: var(--gray);
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .weather-value {
+            color: var(--light);
+            font-weight: 700;
+            font-size: 1rem;
+        }
+
+        /* Time Section - Premium */
+        .time-main {
+            text-align: center;
+            margin-bottom: 35px;
+        }
+
+        .time-display {
+            font-size: 3.5rem;
+            font-weight: 300;
+            margin-bottom: 12px;
+            background: linear-gradient(135deg, var(--light), var(--secondary));
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: 3px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .date-display {
+            font-size: 1.2rem;
+            color: var(--gray);
+            font-weight: 500;
+            letter-spacing: 1px;
+        }
+
+        .system-info {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s ease;
+        }
+
+        .info-item:hover {
+            border-bottom-color: rgba(255, 255, 255, 0.2);
+            transform: translateX(5px);
+        }
+
+        .info-item:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            color: var(--gray);
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .info-value {
+            color: var(--light);
+            font-weight: 700;
+            font-size: 1rem;
+        }
+
+        /* Voice Transcript Display */
+        .voice-transcript {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            min-height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .transcript-text {
+            color: var(--light);
+            font-size: 1.1rem;
+            text-align: center;
+            font-weight: 500;
+        }
+
+        .transcript-text.listening {
+            color: var(--secondary);
+            animation: pulse-text 1s infinite;
+        }
+
+        /* Center Voice Assistant - Premium */
+        .voice-center {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .solar-system {
+            position: relative;
+            width: 500px;
+            height: 500px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 50px;
+        }
+
+        /* Dashed Rings Structure */
+        .ring {
+            position: absolute;
+            border-radius: 50%;
+            border-style: dashed;
+            border-width: 1.5px;
+            animation: rotate-ring linear infinite;
+        }
+
+        .ring-1 {
+            width: 140px;
+            height: 140px;
+            border-color: rgba(0, 102, 255, 0.4);
+            animation-duration: 25s;
+            border-dasharray: 3, 8;
+        }
+
+        .ring-2 {
+            width: 220px;
+            height: 220px;
+            border-color: rgba(0, 212, 170, 0.4);
+            animation-duration: 30s;
+            animation-direction: reverse;
+            border-dasharray: 4, 10;
+        }
+
+        .ring-3 {
+            width: 300px;
+            height: 300px;
+            border-color: rgba(255, 107, 53, 0.4);
+            animation-duration: 35s;
+            border-dasharray: 5, 12;
+        }
+
+        .ring-4 {
+            width: 380px;
+            height: 380px;
+            border-color: rgba(255, 215, 0, 0.4);
+            animation-duration: 40s;
+            animation-direction: reverse;
+            border-dasharray: 6, 14;
+        }
+
+        .ring-5 {
+            width: 460px;
+            height: 460px;
+            border-color: rgba(255, 255, 255, 0.3);
+            animation-duration: 45s;
+            border-dasharray: 7, 16;
+            transition: all 0.5s ease;
+        }
+
+        /* Radiating Effect for Last Ring */
+        .ring-5.radiating {
+            border-color: var(--primary-glow);
+            box-shadow: 
+                0 0 30px var(--primary-glow),
+                0 0 60px var(--primary-glow),
+                0 0 90px var(--primary-glow);
+            animation: pulse-ring 2s ease-in-out infinite;
+        }
+
+        /* Sun Core - Premium */
+        .sun-core {
+            width: 120px;
+            height: 120px;
+            background: linear-gradient(135deg, #FF6B35, #FFD700, #FF8C00);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            z-index: 10;
+            box-shadow: 
+                0 0 60px rgba(255, 107, 53, 0.6),
+                0 0 120px rgba(255, 215, 0, 0.4),
+                inset 0 0 30px rgba(255, 255, 255, 0.3);
+            animation: sun-pulse 4s ease-in-out infinite alternate;
+        }
+
+        .nexa-text {
+            color: white;
+            font-weight: 800;
+            font-size: 1.3rem;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+            letter-spacing: 2px;
+            text-align: center;
+            line-height: 1.2;
+        }
+
+        /* Updated Compact Voice Controls */
+        .voice-controls {
+            text-align: center;
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, 
+                rgba(255, 255, 255, 0.1), 
+                rgba(255, 255, 255, 0.05));
+            backdrop-filter: blur(20px);
+            padding: -10px 15px;
+            border-radius: 40px;
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.3);
+            min-width: 220px;
+            position: relative;
+            bottom:155px;
+            left:120px;
+        
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--gray);
+            margin-right: 10px;
+            box-shadow: 0 0 8px currentColor;
+            vertical-align: middle;
+        }
+
+        .status-indicator.active {
+            background: var(--secondary);
+            animation: pulse 1s infinite;
+            box-shadow: 0 0 15px var(--secondary);
+        }
+
+        .status-text {
+            font-size: 0.9rem;
+            color: var(--gray);
+            margin-bottom: 15px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            vertical-align: middle;
+        }
+
+        /* Updated Compact Button */
+        .voice-btn {
+            background: linear-gradient(135deg, var(--primary), #0052CC);
+            color: white;
+            border: none;
+            padding: 14px 30px;
+            border-radius: 40px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 160px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            box-shadow: 
+                0 8px 25px rgba(0, 102, 255, 0.4),
+                0 0 0 1px rgba(255, 255, 255, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .voice-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, 
+                transparent, 
+                rgba(255, 255, 255, 0.2), 
+                transparent);
+            transition: left 0.5s;
+        }
+
+        .voice-btn:hover::before {
+            left: 100%;
+        }
+
+        .voice-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 
+                0 12px 30px rgba(0, 102, 255, 0.6),
+                0 0 0 1px rgba(255, 255, 255, 0.2);
+        }
+
+        .voice-btn.listening {
+            background: linear-gradient(135deg, var(--accent), #E55A2B);
+            box-shadow: 
+                0 8px 25px rgba(255, 107, 53, 0.4),
+                0 0 0 1px rgba(255, 255, 255, 0.1);
+        }
+
+        /* Enhanced Animations */
+        @keyframes rotate-ring {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes sun-pulse {
+            from { 
+                box-shadow: 
+                    0 0 60px rgba(255, 107, 53, 0.6),
+                    0 0 120px rgba(255, 215, 0, 0.4),
+                    inset 0 0 30px rgba(255, 255, 255, 0.3);
+            }
+            to { 
+                box-shadow: 
+                    0 0 80px rgba(255, 107, 53, 0.8),
+                    0 0 150px rgba(255, 215, 0, 0.6),
+                    inset 0 0 40px rgba(255, 255, 255, 0.4);
+            }
+        }
+
+        @keyframes pulse-ring {
+            0% { 
+                box-shadow: 
+                    0 0 30px var(--primary-glow),
+                    0 0 60px var(--primary-glow),
+                    0 0 90px var(--primary-glow);
+            }
+            50% { 
+                box-shadow: 
+                    0 0 45px var(--primary-glow),
+                    0 0 90px var(--primary-glow),
+                    0 0 135px var(--primary-glow);
+            }
+            100% { 
+                box-shadow: 
+                    0 0 30px var(--primary-glow),
+                    0 0 60px var(--primary-glow),
+                    0 0 90px var(--primary-glow);
+            }
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        @keyframes pulse-text {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        /* Background Particles */
+        .particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: -1;
+        }
+
+        .particle {
+            position: absolute;
+            width: 2px;
+            height: 2px;
+            background: var(--gold);
+            border-radius: 50%;
+            animation: float 8s infinite linear;
+        }
+
+        @keyframes float {
+            0% { transform: translateY(100vh) translateX(0); opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { transform: translateY(-100px) translateX(100px); opacity: 0; }
+        }
+
+        /* Premium Responsive Design */
+        @media (max-width: 1200px) {
+            .container {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr auto;
+                height: auto;
+                gap: 30px;
+                max-width: 600px;
+            }
+            
+            .solar-system {
+                width: 400px;
+                height: 400px;
+            }
+            
+            .ring-5 {
+                width: 360px;
+                height: 360px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .solar-system {
+                width: 320px;
+                height: 320px;
+            }
+            
+            .ring-5 {
+                width: 280px;
+                height: 280px;
+            }
+            
+            .sun-core {
+                width: 100px;
+                height: 100px;
+            }
+            
+            .nexa-text {
+                font-size: 1.1rem;
+            }
+            
+            .voice-controls {
+                min-width: 200px;
+                padding: 18px 25px;
+            }
+            
+            .voice-btn {
+                min-width: 140px;
+                padding: 12px 25px;
+                font-size: 0.85rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Background Particles -->
+    <div class="particles" id="particles"></div>
+
+    <div class="container">
+        <!-- Left Pillar - Weather -->
+        <div class="pillar">
+            <div class="pillar-title">Weather Intelligence</div>
+            <div class="weather-main">
+                <div class="weather-icon">
+                    <i class="fas fa-sun"></i>
+                </div>
+                <div class="temperature" id="temperature">27°C</div>
+                <div class="weather-desc" id="weatherDesc">Partly Cloudy</div>
+            </div>
+            <div class="weather-details">
+                <div class="weather-item">
+                    <span class="weather-label">Humidity</span>
+                    <span class="weather-value" id="humidity">70%</span>
+                </div>
+                <div class="weather-item">
+                    <span class="weather-label">Wind Speed</span>
+                    <span class="weather-value" id="windSpeed">12 km/h</span>
+                </div>
+                <div class="weather-item">
+                    <span class="weather-label">Pressure</span>
+                    <span class="weather-value" id="pressure">1013 hPa</span>
+                </div>
+                <div class="weather-item">
+                    <span class="weather-label">Visibility</span>
+                    <span class="weather-value" id="visibility">10 km</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center Voice Assistant with Dashed Rings -->
+        <div class="voice-center">
+            <div class="solar-system">
+                <!-- Dashed Rings Structure -->
+                <div class="ring ring-1"></div>
+                <div class="ring ring-2"></div>
+                <div class="ring ring-3"></div>
+                <div class="ring ring-4"></div>
+                <div class="ring ring-5" id="outerRing"></div>
+                
+                <!-- Sun Center -->
+                <div class="sun-core">
+                    <div class="nexa-text">
+                        NEXA<br>AI
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Voice Transcript Display -->
+            <div class="voice-transcript">
+                <div class="transcript-text" id="transcriptText">
+                    Speak to interact with Nexa AI
+                </div>
+            </div>
+
+            <div class="voice-controls">
+                <div class="status-text">
+                    <span class="status-indicator" id="statusIndicator"></span>
+                    <span id="statusText">READY</span>
+                </div>
+                <button class="voice-btn" id="voiceBtn">
+                    START NEXA
+                </button>
+            </div>
+        </div>
+
+        <!-- Right Pillar - System Overview -->
+        <div class="pillar">
+            <div class="pillar-title">System Overview</div>
+            <div class="time-main">
+                <div class="time-display" id="timeDisplay">22:07:14</div>
+                <div class="date-display" id="dateDisplay">25 October 2025</div>
+            </div>
+            <div class="system-info">
+                <div class="info-item">
+                    <span class="info-label">Location</span>
+                    <span class="info-value" id="location">Mumbai, IN</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Voice Status</span>
+                    <span class="info-value" id="voiceStatus">IDLE</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">AI Model</span>
+                    <span class="info-value">Nexa AI v2.1</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Response Time</span>
+                    <span class="info-value" id="responseTime">0.2s</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Create background particles
+       // 🌌 Particle animation
+// 🌌 Particle animation
+
+// 🌌 Particle animation
+ 
+// 🌌 Particle Animation
+// 🌌 Particle Animation
+// 🌌 Particle Animation
+// 🎙️ Speech Recognition Setup
+const voiceBtn = document.getElementById('voiceBtn');
+const statusIndicator = document.getElementById('statusIndicator');
+const statusText = document.getElementById('statusText');
+const transcriptText = document.getElementById('transcriptText');
+const outerRing = document.getElementById('outerRing');
+const voiceStatus = document.getElementById('voiceStatus');
+
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = new SpeechRecognition();
+let isListening = false;
+
+recognition.lang = 'en-IN'; // Hinglish recognition
+recognition.interimResults = true;
+
+recognition.onstart = () => {
+    isListening = true;
+    transcriptText.textContent = "Listening...";
+    transcriptText.classList.add('listening');
+    statusText.textContent = "LISTENING";
+    statusIndicator.classList.add('active');
+    outerRing.classList.add('radiating');
+    voiceStatus.textContent = "ACTIVE";
+};
+
+recognition.onresult = (event) => {
+    const transcript = Array.from(event.results)
+        .map(result => result[0])
+        .map(result => result.transcript)
+        .join('');
+    transcriptText.textContent = transcript;
+
+    if (event.results[0].isFinal) {
+        processVoiceCommand(transcript);
+    }
+};
+
+recognition.onerror = (e) => {
+    transcriptText.textContent = "Error: " + e.error;
+    resetVoice();
+};
+
+recognition.onend = () => resetVoice();
+
+function resetVoice() {
+    isListening = false;
+    transcriptText.classList.remove('listening');
+    statusIndicator.classList.remove('active');
+    statusText.textContent = "READY";
+    outerRing.classList.remove('radiating');
+    voiceStatus.textContent = "IDLE";
+}
+
+voiceBtn.addEventListener('click', () => {
+    if (!isListening) recognition.start();
+    else recognition.stop();
+});
+
+// 🎧 Voice Command Logic
+function processVoiceCommand(text) {
+    text = text.toLowerCase();
+
+    if (text.includes("hello") || text.includes("hi")) {
+        alert("Hello Abhi! How are you?");
+    } 
+    else if (text.includes("nexa play the song saiyaara")) {
+        window.open("https://youtu.be/BSJa1UytM8w?si=FnEn6bpjKgFU1UTf");
+        
+        alert("ok");
+    } 
+    else if (text.includes("time")) {
+        const time = new Date().toLocaleTimeString();
+        alert("The time is " + time);
+    } 
+    else if (text.includes("date")) {
+        const date = new Date().toDateString();
+        alert("Today's date is " + date);
+    } 
+    else {
+        alert("Sorry Abhi, I didn’t understand that.");
+    }
+}
+
+// 🔊 Speak Function — Backend se natural ElevenLabs voice fetch karta hai
+async function speak(message) {
+    try {
+        const res = await fetch("http://localhost:5000/speak", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message })
+        });
+
+        if (!res.ok) throw new Error("Backend not responding");
+
+        const audioBlob = await res.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+
+        const audio = new Audio(audioUrl);
+        audio.play();
+
+    } catch (error) {
+        console.error("Voice playback error:", error);
+        alert("Voice error: " + error.message);
+    }
+}
+
+    </script>
+</body>
+</html>
