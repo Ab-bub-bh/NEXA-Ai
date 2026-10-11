@@ -8,7 +8,6 @@ dotenv.config();
 import { writeFileSync, unlinkSync } from "fs";
 import path from "path";
 import os from "os";
-import path from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
