@@ -1434,7 +1434,7 @@ const userState = new Map();
 const MANUAL_WINDOW_MS = 5 * 60 * 1000;
 const FREEFORM_WINDOW_MS = 5 * 60 * 1000;
 const MAX_AI_REPLIES = 3;
-const TEMPLATE_NAME = "followup_1min";
+const TEMPLATE_NAME = "hello_world";
 
 // ---- Groq ----
 const groqHistory = new Map();
