@@ -3,13 +3,16 @@ import fetch from "node-fetch";
 import cors from "cors";
 import { exec } from "child_process";
 import mongoose from "mongoose";
-
 import dotenv from "dotenv";
 dotenv.config();
-
 import { writeFileSync, unlinkSync } from "fs";
 import path from "path";
 import os from "os";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
@@ -694,6 +697,13 @@ app.post("/vscode", (req, res) => {
 // --------------------------------------
 
 
+app.get("/voice", (res) => {
+  res.sendFile(path.join(__dirname, "Voice.html"));
+});
+
+app.get("/chat", (res) => {
+  res.sendFile(path.join(__dirname, "chat.html"));
+});
 
 
 
