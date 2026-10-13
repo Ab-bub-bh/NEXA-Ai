@@ -1,5 +1,4 @@
 import express from "express";
-import fetch from "node-fetch";
 import cors from "cors";
 import { exec } from "child_process";
 import mongoose from "mongoose";
@@ -10,6 +9,12 @@ import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 
+// ============================================
+// WhatsApp Cloud API — NAYE IMPORTS
+// ============================================
+import Redis from "ioredis";                    // ✅ ADD
+import { Queue, Worker } from "bullmq";         // ✅ ADD
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -19,7 +24,7 @@ app.use(express.json());
 
 
 
-mongoose.connect("mongodb://127.0.0.1:27017/voiceHistory")
+/*mongoose.connect("mongodb://127.0.0.1:27017/voiceHistory")
 .then(() => console.log("mongoDB Connected"))
 .catch(err => console.log(err));
 const voiceSchema = new mongoose.Schema({
@@ -1426,28 +1431,144 @@ app.listen(5000, () => {
 
 // =====================================================================
 // WhatsApp Cloud API — Manual 5min + Freeform 5min (3 replies) + Template
-// =====================================================================
+// ===================================================================
 
-const userState = new Map();
-// userId → { phase, manualTimer, freeformTimer, replyCount, pendingMessages, lastMessage }
+// ════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+// WHATSAPP CLOUD API — AI AUTO-REPLY SYSTEM
+// Flow: Manual 5min → AI 5min (max 3) → Cooldown 5min → Repeat
+// ════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
 
-const MANUAL_WINDOW_MS = 5 * 60 * 1000;
-const FREEFORM_WINDOW_MS = 5 * 60 * 1000;
-const MAX_AI_REPLIES = 3;
-const TEMPLATE_NAME = "hello_world";
+// ---- Constants ----
+const MANUAL_WINDOW_MS   = 5 * 60 * 1000;
+const AI_WINDOW_MS       = 5 * 60 * 1000;
+const COOLDOWN_WINDOW_MS = 5 * 60 * 1000;
+const MAX_AI_REPLIES     = 3;
+
+const WHATSAPP_24H_MS = 24 * 60 * 60 * 1000;
+const EDGE_SKIP_MS    = 5 * 60 * 1000;
+
+const PHASE = {
+  IDLE:     "idle",
+  MANUAL:   "manual",
+  AI:       "ai",
+  COOLDOWN: "cooldown",
+};
+
+const WA_QUEUE_NAME = "wa-cloud-timers";
+
+const JOB = {
+  MANUAL_TO_AI:     "manual_to_ai",
+  AI_TO_COOLDOWN:   "ai_to_cooldown",
+  COOLDOWN_TO_IDLE: "cooldown_to_idle",
+};
+
+const TEXT_CONVERSATION_OVER = "Conversation Over";
+const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_SYSTEM_PROMPT =
+  "You are a helpful WhatsApp assistant. Reply briefly and naturally like a human texting. Keep replies short.";
+
+// ---- Redis ----
+const STATE_PREFIX   = "wa:state:";
+const HISTORY_PREFIX = "wa:history:";
+const HISTORY_MAX    = 12;
+
+let _waRedis = null;
+let _waBullRedis = null;
+
+function getWaRedis() {
+  if (!_waRedis) {
+    _waRedis = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    });
+    _waRedis.on("connect", () => console.log("✅ Redis connected"));
+    _waRedis.on("error", (err) => console.error("❌ Redis error:", err.message));
+  }
+  return _waRedis;
+}
+
+function getWaBullConnection() {
+  if (!_waBullRedis) {
+    _waBullRedis = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    });
+    _waBullRedis.on("error", (err) => console.error("❌ Bull Redis error:", err.message));
+  }
+  return _waBullRedis;
+}
+
+const DEFAULT_STATE = () => ({
+  phase: PHASE.IDLE,
+  replyCount: 0,
+  lastMessage: "",
+  pendingMessages: [],
+  cycleStartTime: 0,
+  lastUserMessageTime: 0,
+});
+
+async function getState(phoneNumber) {
+  const raw = await getWaRedis().get(STATE_PREFIX + phoneNumber);
+  if (!raw) return DEFAULT_STATE();
+  try {
+    return { ...DEFAULT_STATE(), ...JSON.parse(raw) };
+  } catch {
+    return DEFAULT_STATE();
+  }
+}
+
+async function setState(phoneNumber, state) {
+  await getWaRedis().set(STATE_PREFIX + phoneNumber, JSON.stringify(state));
+}
+
+async function resetState(phoneNumber) {
+  await getWaRedis().set(STATE_PREFIX + phoneNumber, JSON.stringify(DEFAULT_STATE()));
+}
+
+async function getHistory(phoneNumber) {
+  const raw = await getWaRedis().get(HISTORY_PREFIX + phoneNumber);
+  return raw ? JSON.parse(raw) : [];
+}
+
+async function setHistory(phoneNumber, history) {
+  const trimmed = history.slice(-HISTORY_MAX);
+  await getWaRedis().set(HISTORY_PREFIX + phoneNumber, JSON.stringify(trimmed));
+}
+
+// ---- BullMQ Queue ----
+const waTimerQueue = new Queue(WA_QUEUE_NAME, {
+  connection: getWaBullConnection(),
+  defaultJobOptions: {
+    removeOnComplete: true,
+    removeOnFail: 100,
+  },
+});
+
+async function scheduleTransition({ phoneNumber, jobName, delayMs }) {
+  await cancelTransition(phoneNumber);
+  await waTimerQueue.add(jobName, { phoneNumber }, {
+    delay: delayMs,
+    jobId: phoneNumber,
+  });
+  console.log(`⏱️ Scheduled ${jobName} [${phoneNumber}] in ${delayMs / 1000}s`);
+}
+
+async function cancelTransition(phoneNumber) {
+  const existing = await waTimerQueue.getJob(phoneNumber);
+  if (existing) {
+    await existing.remove().catch(() => {});
+    console.log(`🛑 Cancelled pending timer [${phoneNumber}]`);
+  }
+}
 
 // ---- Groq ----
-const groqHistory = new Map();
-
-async function askGroq(userId, userMessage) {
-  const history = groqHistory.get(userId) || [];
+async function askGroq(phoneNumber, userMessage) {
+  const history = await getHistory(phoneNumber);
 
   const messages = [
-    {
-      role: "system",
-      content:
-        "You are a helpful WhatsApp assistant. Reply briefly and naturally like a human texting. Keep replies short.",
-    },
+    { role: "system", content: GROQ_SYSTEM_PROMPT },
     ...history,
     { role: "user", content: userMessage },
   ];
@@ -1459,31 +1580,35 @@ async function askGroq(userId, userMessage) {
       Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
     },
     body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
+      model: GROQ_MODEL,
       messages,
       temperature: 0.7,
       max_tokens: 500,
     }),
   });
 
-  if (!res.ok) throw new Error(`Groq error: ${res.status}`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Groq error: ${res.status} ${err}`);
+  }
+
   const data = await res.json();
   const reply = data.choices?.[0]?.message?.content?.trim();
   if (!reply) throw new Error("Empty Groq reply");
 
-  const updated = [
+  await setHistory(phoneNumber, [
     ...history,
     { role: "user", content: userMessage },
     { role: "assistant", content: reply },
-  ].slice(-12);
-  groqHistory.set(userId, updated);
+  ]);
 
   return reply;
 }
 
-// ---- WhatsApp send ----
-async function sendText(to, text) {
+// ---- WhatsApp Send ----
+async function waSendText(to, text) {
   const url = `https://graph.facebook.com/v21.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -1497,139 +1622,238 @@ async function sendText(to, text) {
       text: { body: text },
     }),
   });
+
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Send failed: ${res.status} ${err}`);
+    throw new Error(`WhatsApp send failed: ${res.status} ${err}`);
   }
+
   return res.json();
 }
 
-async function sendTemplate(to) {
-  const url = `https://graph.facebook.com/v21.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-    },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to,
-      type: "template",
-      template: {
-        name: TEMPLATE_NAME,
-        language: { code: "en_US" },
-      },
-    }),
+// ---- Controller ----
+async function startCycle(phoneNumber, userMessage) {
+  const now = Date.now();
+
+  const state = {
+    phase: PHASE.MANUAL,
+    replyCount: 0,
+    lastMessage: userMessage,
+    pendingMessages: [],
+    cycleStartTime: now,
+    lastUserMessageTime: now,
+  };
+
+  await setState(phoneNumber, state);
+  console.log(`⏱️ [${phoneNumber}] MANUAL window start (5 min)`);
+
+  await scheduleTransition({
+    phoneNumber,
+    jobName: JOB.MANUAL_TO_AI,
+    delayMs: MANUAL_WINDOW_MS,
   });
-  if (!res.ok) {
-    const err = await res.text();
-    console.error(`Template failed: ${res.status} ${err}`);
+}
+
+async function transitionManualToAI(phoneNumber) {
+  const state = await getState(phoneNumber);
+  if (state.phase !== PHASE.MANUAL) return;
+
+  const elapsed = Date.now() - (state.lastUserMessageTime || Date.now());
+  const remaining = WHATSAPP_24H_MS - elapsed;
+  if (remaining < EDGE_SKIP_MS && remaining > 0) {
+    console.log(`⏭️ [${phoneNumber}] Near 24h expiry — abort cycle`);
+    await resetState(phoneNumber);
+    return;
   }
-  return res.json();
+
+  state.phase = PHASE.AI;
+  state.replyCount = 0;
+  await setState(phoneNumber, state);
+
+  console.log(`🤖 [${phoneNumber}] AI window start (5 min, max 3 replies)`);
+
+  await handleAIReply(phoneNumber);
+
+  await scheduleTransition({
+    phoneNumber,
+    jobName: JOB.AI_TO_COOLDOWN,
+    delayMs: AI_WINDOW_MS,
+  });
 }
 
-// ---- State helpers ----
-function getState(userId) {
-  if (!userState.has(userId)) {
-    userState.set(userId, {
-      phase: "idle",
-      manualTimer: null,
-      freeformTimer: null,
-      replyCount: 0,
-      pendingMessages: [],
-      lastMessage: "",
-    });
+async function transitionAIToCooldown(phoneNumber) {
+  const state = await getState(phoneNumber);
+  if (state.phase !== PHASE.AI) return;
+
+  state.phase = PHASE.COOLDOWN;
+  state.pendingMessages = [];
+  await setState(phoneNumber, state);
+
+  console.log(`😴 [${phoneNumber}] COOLDOWN start (5 min)`);
+
+  await scheduleTransition({
+    phoneNumber,
+    jobName: JOB.COOLDOWN_TO_IDLE,
+    delayMs: COOLDOWN_WINDOW_MS,
+  });
+}
+
+async function transitionCooldownToIdle(phoneNumber) {
+  const state = await getState(phoneNumber);
+  if (state.phase !== PHASE.COOLDOWN) return;
+
+  if (state.pendingMessages && state.pendingMessages.length > 0) {
+    const latest = state.pendingMessages[state.pendingMessages.length - 1];
+    console.log(`🔁 [${phoneNumber}] Cooldown done → new cycle (latest pending)`);
+    await startCycle(phoneNumber, latest);
+    return;
   }
-  return userState.get(userId);
+
+  await resetState(phoneNumber);
+  console.log(`💤 [${phoneNumber}] IDLE`);
 }
 
-function clearTimers(state) {
-  if (state.manualTimer) clearTimeout(state.manualTimer);
-  if (state.freeformTimer) clearTimeout(state.freeformTimer);
-  state.manualTimer = null;
-  state.freeformTimer = null;
-}
-
-// ---- Core flow ----
-function startManualWindow(userId) {
-  const state = getState(userId);
-  clearTimers(state);
-
-  state.phase = "manual";
-  state.replyCount = 0;
-
-  console.log(`⏱️ [${userId}] MANUAL window start (5 min)`);
-
-  state.manualTimer = setTimeout(() => {
-    console.log(`⏰ [${userId}] Manual done → FREEFORM start`);
-    startFreeformWindow(userId);
-  }, MANUAL_WINDOW_MS);
-}
-
-function startFreeformWindow(userId) {
-  const state = getState(userId);
-  clearTimers(state);
-
-  state.phase = "freeform";
-  state.replyCount = 0;
-
-  console.log(`🤖 [${userId}] FREEFORM window start (5 min, max 3 AI replies)`);
-
-  // Turant pehla AI reply
-  handleAIReply(userId).catch((e) => console.error(e.message));
-
-  state.freeformTimer = setTimeout(() => {
-    console.log(`⏰ [${userId}] Freeform done → TEMPLATE`);
-    endFreeformWindow(userId);
-  }, FREEFORM_WINDOW_MS);
-}
-
-async function handleAIReply(userId) {
-  const state = getState(userId);
-  if (state.phase !== "freeform") return;
+async function handleAIReply(phoneNumber) {
+  const state = await getState(phoneNumber);
+  if (state.phase !== PHASE.AI) return;
   if (state.replyCount >= MAX_AI_REPLIES) return;
   if (!state.lastMessage) return;
 
+  state.replyCount += 1;
+  const currentCount = state.replyCount;
+  await setState(phoneNumber, state);
+
   try {
-    const reply = await askGroq(userId, state.lastMessage);
-    await sendText(userId, reply);
-    state.replyCount++;
-    console.log(
-      `📤 [${userId}] AI reply ${state.replyCount}/${MAX_AI_REPLIES} → ${reply}`
-    );
+    const reply = await askGroq(phoneNumber, state.lastMessage);
+    await waSendText(phoneNumber, reply);
+    console.log(`📤 [${phoneNumber}] AI reply ${currentCount}/${MAX_AI_REPLIES}`);
+
+    if (currentCount >= MAX_AI_REPLIES) {
+      try {
+        await waSendText(phoneNumber, TEXT_CONVERSATION_OVER);
+        console.log(`📤 [${phoneNumber}] Conversation Over sent`);
+      } catch (err) {
+        console.error(`Conversation Over failed [${phoneNumber}]:`, err.message);
+      }
+      await transitionAIToCooldown(phoneNumber);
+    }
   } catch (err) {
-    console.error(`AI reply failed [${userId}]:`, err.message);
+    console.error(`AI reply failed [${phoneNumber}]:`, err.message);
+    state.replyCount = Math.max(0, state.replyCount - 1);
+    await setState(phoneNumber, state);
   }
 }
 
-async function endFreeformWindow(userId) {
-  const state = getState(userId);
-  clearTimers(state);
+async function handleUserMessage(phoneNumber, text) {
+  const state = await getState(phoneNumber);
 
-  // Template
-  try {
-    await sendTemplate(userId);
-    console.log(`📤 [${userId}] Template sent`);
-  } catch (err) {
-    console.error(`Template error [${userId}]:`, err.message);
+  if (state.phase === PHASE.IDLE && state.lastUserMessageTime) {
+    const elapsed = Date.now() - state.lastUserMessageTime;
+    if (elapsed > WHATSAPP_24H_MS - EDGE_SKIP_MS && elapsed < WHATSAPP_24H_MS) {
+      console.log(`⏭️ [${phoneNumber}] Near 24h expiry — skip processing`);
+      return;
+    }
   }
 
-  state.phase = "idle";
-
-  // Pending messages → naya manual cycle
-  if (state.pendingMessages.length > 0) {
-    const pending = state.pendingMessages;
-    state.pendingMessages = [];
-    state.lastMessage = pending[pending.length - 1]; // latest
-    console.log(
-      `🔁 [${userId}] ${pending.length} pending → naya MANUAL window`
-    );
-    startManualWindow(userId);
+  if (state.phase === PHASE.IDLE) {
+    await startCycle(phoneNumber, text);
+  } else if (state.phase === PHASE.MANUAL) {
+    state.lastMessage = text;
+    await setState(phoneNumber, state);
+    console.log(`📝 [${phoneNumber}] Saved (manual window still running)`);
+  } else if (state.phase === PHASE.AI) {
+    state.lastMessage = text;
+    await setState(phoneNumber, state);
+    if (state.replyCount < MAX_AI_REPLIES) {
+      await handleAIReply(phoneNumber);
+    }
+  } else if (state.phase === PHASE.COOLDOWN) {
+    state.pendingMessages.push(text);
+    await setState(phoneNumber, state);
+    console.log(`📥 [${phoneNumber}] Pending during cooldown (${state.pendingMessages.length})`);
   }
 }
 
-// ---- Webhook ----
+async function handleOwnerReply(phoneNumber) {
+  const state = await getState(phoneNumber);
+  if (state.phase === PHASE.MANUAL || state.phase === PHASE.AI) {
+    console.log(`🛑 [${phoneNumber}] Owner replied → STOP + RESET`);
+    await cancelTransition(phoneNumber);
+    await resetState(phoneNumber);
+  }
+}
+
+// ---- Webhook Processor ----
+async function processWebhook(body) {
+  if (body.object !== "whatsapp_business_account") return;
+
+  const entry = body.entry?.[0];
+  const change = entry?.changes?.[0];
+  const value = change?.value;
+  if (!value) return;
+
+  const messages = value.messages;
+  if (Array.isArray(messages)) {
+    for (const message of messages) {
+      if (message.type !== "text") continue;
+      const from = message.from;
+      const text = message.text?.body;
+      if (!from || !text) continue;
+
+      console.log(`📩 [${from}] ${text}`);
+      await handleUserMessage(from, text);
+    }
+  }
+
+  const echoes = value.message_echoes || value.echoes;
+  if (Array.isArray(echoes)) {
+    for (const echo of echoes) {
+      const to = echo.to;
+      if (!to) continue;
+      console.log(`🛑 Owner replied to [${to}]`);
+      await handleOwnerReply(to);
+    }
+  }
+}
+
+// ---- BullMQ Worker ----
+const waTimerWorker = new Worker(
+  WA_QUEUE_NAME,
+  async (job) => {
+    const { phoneNumber } = job.data;
+    console.log(`⏰ Job fired: ${job.name} [${phoneNumber}]`);
+
+    switch (job.name) {
+      case JOB.MANUAL_TO_AI:
+        await transitionManualToAI(phoneNumber);
+        break;
+      case JOB.AI_TO_COOLDOWN:
+        await transitionAIToCooldown(phoneNumber);
+        break;
+      case JOB.COOLDOWN_TO_IDLE:
+        await transitionCooldownToIdle(phoneNumber);
+        break;
+      default:
+        console.warn(`Unknown job: ${job.name}`);
+    }
+  },
+  {
+    connection: getWaBullConnection(),
+    concurrency: 5,
+  }
+);
+
+waTimerWorker.on("failed", (job, err) => {
+  console.error(`❌ Job ${job?.name} failed:`, err.message);
+});
+
+waTimerWorker.on("error", (err) => {
+  console.error("❌ Worker error:", err.message);
+});
+
+console.log("🚀 BullMQ worker started");
+
+// ---- Webhook Routes ----
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -1639,75 +1863,26 @@ app.get("/webhook", (req, res) => {
     console.log("✅ Webhook verified");
     return res.status(200).send(challenge);
   }
+  console.log("❌ Webhook verification failed");
   return res.sendStatus(403);
 });
 
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
-
   try {
-    const body = req.body;
-    if (body.object !== "whatsapp_business_account") return;
-
-    const entry = body.entry?.[0];
-    const change = entry?.changes?.[0];
-    const value = change?.value;
-    const message = value?.messages?.[0];
-
-    if (!message) return;
-    if (message.type !== "text") return;
-
-    const from = message.from;
-    const to = message.to;
-    const text = message.text.body;
-    const MY_NUMBER = process.env.WHATSAPP_BUSINESS_NUMBER;
-
-    // ===== ECHO DETECT =====
-  if (from === MY_NUMBER) {
-  console.log(`🔁 [${to}] Manual reply detected: ${text}`);
-  
-  const state = userState.get(to);
-  if (state) {
-    clearTimers(state);
-    state.phase = "idle";
-    state.replyCount = 0;
-    state.pendingMessages = [];
-    console.log(`⏹️ [${to}] Wait cancelled — you replied manually`);
-  }
-  return;
-}
-
-    console.log(`📩 [${from}] ${text}`);
-
-    const state = getState(from);
-    state.lastMessage = text;
-
-    if (state.phase === "idle") {
-      startManualWindow(from);
-    } else if (state.phase === "manual") {
-      // Manual window chal rahi hai — timer reset NAHI, bas message save
-      console.log(`📝 [${from}] Saved (manual window still running)`);
-    } else if (state.phase === "freeform") {
-      if (state.replyCount < MAX_AI_REPLIES) {
-        await handleAIReply(from);
-      } else {
-        state.pendingMessages.push(text);
-        console.log(
-          `📥 [${from}] Limit hit → pending (${state.pendingMessages.length})`
-        );
-      }
-    }
+    await processWebhook(req.body);
   } catch (err) {
-    console.error("Webhook error:", err.message);
+    console.error("Webhook handler error:", err.message);
   }
 });
 
+// ════════════════════════════════════════════════════════════
+// END — WhatsApp Cloud API
+// ════════════════════════════════════════════════════════════
 
-
-
-
-
-
-
-
-
+// ============================================
+// 🚀 START SERVER
+// ============================================
+app.listen(5000, () => {
+  console.log("🚀 Automation Routes Server Running on PORT 5000");
+});
