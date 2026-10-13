@@ -1459,7 +1459,7 @@ app.listen(5000, () => {
 // No timers, no Redis, no BullMQ
 // ════════════════════════════════════════════════════════════
 
-const GROQ_MODEL = "llama-3.3-70b-versatile";
+const GROQ_MODEL = "openai/gpt-oss-20b";
 
 // ---- Groq AI ----
 async function askGroq(userMessage) {
