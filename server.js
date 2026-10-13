@@ -11,7 +11,7 @@ import { fileURLToPath } from "url";
 
 // ============================================
 // WhatsApp Cloud API — NAYE IMPORTS
-// ============================================   // ✅ ADD
+// ============================================  
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1543,6 +1543,7 @@ app.get("/webhook", (req, res) => {
 
 // ---- Webhook Handler (POST) ----
 app.post("/webhook", async (req, res) => {
+  console.log("🔥 WEBHOOK HIT:", JSON.stringify(req.body, null, 2));
   res.sendStatus(200);
 
   try {
