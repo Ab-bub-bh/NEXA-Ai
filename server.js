@@ -1533,9 +1533,10 @@ async function waSendText(to, text) {
   });
 
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`WhatsApp send failed: ${res.status} ${err}`);
-  }
+  const err = await res.text();
+  console.error("WhatsApp API Error:", err);
+  throw new Error(`WhatsApp send failed: ${res.status} ${err}`);
+}
   return res.json();
 }
 
