@@ -11,9 +11,7 @@ import { fileURLToPath } from "url";
 
 // ============================================
 // WhatsApp Cloud API — NAYE IMPORTS
-// ============================================
-import Redis from "ioredis";                    // ✅ ADD
-import { Queue, Worker } from "bullmq";         // ✅ ADD
+// ============================================   // ✅ ADD
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1214,9 +1212,9 @@ app.post("/youtube", async (req, res) => {
     // OPEN IN CHROME → DIRECT VIDEO PLAY
     exec(`start chrome "${url}"`);
 
-    await VoiceModel.create({
+   /* await VoiceModel.create({
       command:req.body.command});
-    console.log("saved to mongodb :" ,req.body.command );
+    console.log("saved to mongodb :" ,req.body.command );*/
 
     res.json({ status: "ok", action: `Playing: ${songName}` });
 
@@ -1441,137 +1439,43 @@ app.listen(5000, () => {
 // ════════════════════════════════════════════════════════════
 
 // ---- Constants ----
-const MANUAL_WINDOW_MS   = 5 * 60 * 1000;
-const AI_WINDOW_MS       = 5 * 60 * 1000;
-const COOLDOWN_WINDOW_MS = 5 * 60 * 1000;
-const MAX_AI_REPLIES     = 3;
+// ════════════════════════════════════════════════════════════
+// WHATSAPP CLOUD API — INSTANT AI REPLY
+// ════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════
+// WHATSAPP CLOUD API — INSTANT AI REPLY
+// No timers, no Redis, no BullMQ
+// ════════════════════════════════════════════════════════════
 
-const WHATSAPP_24H_MS = 24 * 60 * 60 * 1000;
-const EDGE_SKIP_MS    = 5 * 60 * 1000;
-
-const PHASE = {
-  IDLE:     "idle",
-  MANUAL:   "manual",
-  AI:       "ai",
-  COOLDOWN: "cooldown",
-};
-
-const WA_QUEUE_NAME = "wa-cloud-timers";
-
-const JOB = {
-  MANUAL_TO_AI:     "manual_to_ai",
-  AI_TO_COOLDOWN:   "ai_to_cooldown",
-  COOLDOWN_TO_IDLE: "cooldown_to_idle",
-};
-
-const TEXT_CONVERSATION_OVER = "Conversation Over";
 const GROQ_MODEL = "llama-3.3-70b-versatile";
-const GROQ_SYSTEM_PROMPT =
-  "You are a helpful WhatsApp assistant. Reply briefly and naturally like a human texting. Keep replies short.";
 
-// ---- Redis ----
-const STATE_PREFIX   = "wa:state:";
-const HISTORY_PREFIX = "wa:history:";
-const HISTORY_MAX    = 12;
+// ---- Groq AI ----
+async function askGroq(userMessage) {
+  const SYSTEM_RULES = `
+- Your name is Nexa.
+- Always address the user as "Abhi".
+- Tone: warm, natural, conversational — like a thoughtful friend.
+- Language: Match Abhi's language.
+  - If he speaks English → reply in English.
+  - If he speaks Hindi or Hinglish → reply in Hinglish (Hindi written in English letters, e.g., "kaise ho", "bilkul", "chalta hai").
+  - Never use Devanagari script. Always use Roman/English letters.
+- Use contractions naturally (it's, you're, I'll, let's).
+- Keep responses to 1-2 short sentences (10-20 words total). Never exceed 25 words.
+- Briefly acknowledge what Abhi says, then answer.
+- Match Abhi's energy — casual when he's casual, serious when he's serious.
+- Small humor is fine when appropriate.
+- Never sound robotic or over-formal.
+- Do NOT explain long.
+- Do NOT ask follow-up questions.
+- Avoid filler like "Sure!", "Of course!", "Certainly!".
+- Always end with proper punctuation (. ! ?) for natural voice.
+- Speak only in English or Hinglish (Roman letters). Never use Hindi script.
 
-let _waRedis = null;
-let _waBullRedis = null;
+USER COMMAND:
+${userMessage}
 
-function getWaRedis() {
-  if (!_waRedis) {
-    _waRedis = new Redis(process.env.REDIS_URL, {
-      maxRetriesPerRequest: null,
-      enableReadyCheck: false,
-    });
-    _waRedis.on("connect", () => console.log("✅ Redis connected"));
-    _waRedis.on("error", (err) => console.error("❌ Redis error:", err.message));
-  }
-  return _waRedis;
-}
-
-function getWaBullConnection() {
-  if (!_waBullRedis) {
-    _waBullRedis = new Redis(process.env.REDIS_URL, {
-      maxRetriesPerRequest: null,
-      enableReadyCheck: false,
-    });
-    _waBullRedis.on("error", (err) => console.error("❌ Bull Redis error:", err.message));
-  }
-  return _waBullRedis;
-}
-
-const DEFAULT_STATE = () => ({
-  phase: PHASE.IDLE,
-  replyCount: 0,
-  lastMessage: "",
-  pendingMessages: [],
-  cycleStartTime: 0,
-  lastUserMessageTime: 0,
-});
-
-async function getState(phoneNumber) {
-  const raw = await getWaRedis().get(STATE_PREFIX + phoneNumber);
-  if (!raw) return DEFAULT_STATE();
-  try {
-    return { ...DEFAULT_STATE(), ...JSON.parse(raw) };
-  } catch {
-    return DEFAULT_STATE();
-  }
-}
-
-async function setState(phoneNumber, state) {
-  await getWaRedis().set(STATE_PREFIX + phoneNumber, JSON.stringify(state));
-}
-
-async function resetState(phoneNumber) {
-  await getWaRedis().set(STATE_PREFIX + phoneNumber, JSON.stringify(DEFAULT_STATE()));
-}
-
-async function getHistory(phoneNumber) {
-  const raw = await getWaRedis().get(HISTORY_PREFIX + phoneNumber);
-  return raw ? JSON.parse(raw) : [];
-}
-
-async function setHistory(phoneNumber, history) {
-  const trimmed = history.slice(-HISTORY_MAX);
-  await getWaRedis().set(HISTORY_PREFIX + phoneNumber, JSON.stringify(trimmed));
-}
-
-// ---- BullMQ Queue ----
-const waTimerQueue = new Queue(WA_QUEUE_NAME, {
-  connection: getWaBullConnection(),
-  defaultJobOptions: {
-    removeOnComplete: true,
-    removeOnFail: 100,
-  },
-});
-
-async function scheduleTransition({ phoneNumber, jobName, delayMs }) {
-  await cancelTransition(phoneNumber);
-  await waTimerQueue.add(jobName, { phoneNumber }, {
-    delay: delayMs,
-    jobId: phoneNumber,
-  });
-  console.log(`⏱️ Scheduled ${jobName} [${phoneNumber}] in ${delayMs / 1000}s`);
-}
-
-async function cancelTransition(phoneNumber) {
-  const existing = await waTimerQueue.getJob(phoneNumber);
-  if (existing) {
-    await existing.remove().catch(() => {});
-    console.log(`🛑 Cancelled pending timer [${phoneNumber}]`);
-  }
-}
-
-// ---- Groq ----
-async function askGroq(phoneNumber, userMessage) {
-  const history = await getHistory(phoneNumber);
-
-  const messages = [
-    { role: "system", content: GROQ_SYSTEM_PROMPT },
-    ...history,
-    { role: "user", content: userMessage },
-  ];
+FINAL OUTPUT:
+`;
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -1581,8 +1485,8 @@ async function askGroq(phoneNumber, userMessage) {
     },
     body: JSON.stringify({
       model: GROQ_MODEL,
-      messages,
-      temperature: 0.7,
+      messages: [{ role: "user", content: SYSTEM_RULES }],
+      temperature: 0.3,
       max_tokens: 500,
     }),
   });
@@ -1595,17 +1499,10 @@ async function askGroq(phoneNumber, userMessage) {
   const data = await res.json();
   const reply = data.choices?.[0]?.message?.content?.trim();
   if (!reply) throw new Error("Empty Groq reply");
-
-  await setHistory(phoneNumber, [
-    ...history,
-    { role: "user", content: userMessage },
-    { role: "assistant", content: reply },
-  ]);
-
   return reply;
 }
 
-// ---- WhatsApp Send ----
+// ---- WhatsApp Send Text ----
 async function waSendText(to, text) {
   const url = `https://graph.facebook.com/v21.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
@@ -1627,233 +1524,10 @@ async function waSendText(to, text) {
     const err = await res.text();
     throw new Error(`WhatsApp send failed: ${res.status} ${err}`);
   }
-
   return res.json();
 }
 
-// ---- Controller ----
-async function startCycle(phoneNumber, userMessage) {
-  const now = Date.now();
-
-  const state = {
-    phase: PHASE.MANUAL,
-    replyCount: 0,
-    lastMessage: userMessage,
-    pendingMessages: [],
-    cycleStartTime: now,
-    lastUserMessageTime: now,
-  };
-
-  await setState(phoneNumber, state);
-  console.log(`⏱️ [${phoneNumber}] MANUAL window start (5 min)`);
-
-  await scheduleTransition({
-    phoneNumber,
-    jobName: JOB.MANUAL_TO_AI,
-    delayMs: MANUAL_WINDOW_MS,
-  });
-}
-
-async function transitionManualToAI(phoneNumber) {
-  const state = await getState(phoneNumber);
-  if (state.phase !== PHASE.MANUAL) return;
-
-  const elapsed = Date.now() - (state.lastUserMessageTime || Date.now());
-  const remaining = WHATSAPP_24H_MS - elapsed;
-  if (remaining < EDGE_SKIP_MS && remaining > 0) {
-    console.log(`⏭️ [${phoneNumber}] Near 24h expiry — abort cycle`);
-    await resetState(phoneNumber);
-    return;
-  }
-
-  state.phase = PHASE.AI;
-  state.replyCount = 0;
-  await setState(phoneNumber, state);
-
-  console.log(`🤖 [${phoneNumber}] AI window start (5 min, max 3 replies)`);
-
-  await handleAIReply(phoneNumber);
-
-  await scheduleTransition({
-    phoneNumber,
-    jobName: JOB.AI_TO_COOLDOWN,
-    delayMs: AI_WINDOW_MS,
-  });
-}
-
-async function transitionAIToCooldown(phoneNumber) {
-  const state = await getState(phoneNumber);
-  if (state.phase !== PHASE.AI) return;
-
-  state.phase = PHASE.COOLDOWN;
-  state.pendingMessages = [];
-  await setState(phoneNumber, state);
-
-  console.log(`😴 [${phoneNumber}] COOLDOWN start (5 min)`);
-
-  await scheduleTransition({
-    phoneNumber,
-    jobName: JOB.COOLDOWN_TO_IDLE,
-    delayMs: COOLDOWN_WINDOW_MS,
-  });
-}
-
-async function transitionCooldownToIdle(phoneNumber) {
-  const state = await getState(phoneNumber);
-  if (state.phase !== PHASE.COOLDOWN) return;
-
-  if (state.pendingMessages && state.pendingMessages.length > 0) {
-    const latest = state.pendingMessages[state.pendingMessages.length - 1];
-    console.log(`🔁 [${phoneNumber}] Cooldown done → new cycle (latest pending)`);
-    await startCycle(phoneNumber, latest);
-    return;
-  }
-
-  await resetState(phoneNumber);
-  console.log(`💤 [${phoneNumber}] IDLE`);
-}
-
-async function handleAIReply(phoneNumber) {
-  const state = await getState(phoneNumber);
-  if (state.phase !== PHASE.AI) return;
-  if (state.replyCount >= MAX_AI_REPLIES) return;
-  if (!state.lastMessage) return;
-
-  state.replyCount += 1;
-  const currentCount = state.replyCount;
-  await setState(phoneNumber, state);
-
-  try {
-    const reply = await askGroq(phoneNumber, state.lastMessage);
-    await waSendText(phoneNumber, reply);
-    console.log(`📤 [${phoneNumber}] AI reply ${currentCount}/${MAX_AI_REPLIES}`);
-
-    if (currentCount >= MAX_AI_REPLIES) {
-      try {
-        await waSendText(phoneNumber, TEXT_CONVERSATION_OVER);
-        console.log(`📤 [${phoneNumber}] Conversation Over sent`);
-      } catch (err) {
-        console.error(`Conversation Over failed [${phoneNumber}]:`, err.message);
-      }
-      await transitionAIToCooldown(phoneNumber);
-    }
-  } catch (err) {
-    console.error(`AI reply failed [${phoneNumber}]:`, err.message);
-    state.replyCount = Math.max(0, state.replyCount - 1);
-    await setState(phoneNumber, state);
-  }
-}
-
-async function handleUserMessage(phoneNumber, text) {
-  const state = await getState(phoneNumber);
-
-  if (state.phase === PHASE.IDLE && state.lastUserMessageTime) {
-    const elapsed = Date.now() - state.lastUserMessageTime;
-    if (elapsed > WHATSAPP_24H_MS - EDGE_SKIP_MS && elapsed < WHATSAPP_24H_MS) {
-      console.log(`⏭️ [${phoneNumber}] Near 24h expiry — skip processing`);
-      return;
-    }
-  }
-
-  if (state.phase === PHASE.IDLE) {
-    await startCycle(phoneNumber, text);
-  } else if (state.phase === PHASE.MANUAL) {
-    state.lastMessage = text;
-    await setState(phoneNumber, state);
-    console.log(`📝 [${phoneNumber}] Saved (manual window still running)`);
-  } else if (state.phase === PHASE.AI) {
-    state.lastMessage = text;
-    await setState(phoneNumber, state);
-    if (state.replyCount < MAX_AI_REPLIES) {
-      await handleAIReply(phoneNumber);
-    }
-  } else if (state.phase === PHASE.COOLDOWN) {
-    state.pendingMessages.push(text);
-    await setState(phoneNumber, state);
-    console.log(`📥 [${phoneNumber}] Pending during cooldown (${state.pendingMessages.length})`);
-  }
-}
-
-async function handleOwnerReply(phoneNumber) {
-  const state = await getState(phoneNumber);
-  if (state.phase === PHASE.MANUAL || state.phase === PHASE.AI) {
-    console.log(`🛑 [${phoneNumber}] Owner replied → STOP + RESET`);
-    await cancelTransition(phoneNumber);
-    await resetState(phoneNumber);
-  }
-}
-
-// ---- Webhook Processor ----
-async function processWebhook(body) {
-  if (body.object !== "whatsapp_business_account") return;
-
-  const entry = body.entry?.[0];
-  const change = entry?.changes?.[0];
-  const value = change?.value;
-  if (!value) return;
-
-  const messages = value.messages;
-  if (Array.isArray(messages)) {
-    for (const message of messages) {
-      if (message.type !== "text") continue;
-      const from = message.from;
-      const text = message.text?.body;
-      if (!from || !text) continue;
-
-      console.log(`📩 [${from}] ${text}`);
-      await handleUserMessage(from, text);
-    }
-  }
-
-  const echoes = value.message_echoes || value.echoes;
-  if (Array.isArray(echoes)) {
-    for (const echo of echoes) {
-      const to = echo.to;
-      if (!to) continue;
-      console.log(`🛑 Owner replied to [${to}]`);
-      await handleOwnerReply(to);
-    }
-  }
-}
-
-// ---- BullMQ Worker ----
-const waTimerWorker = new Worker(
-  WA_QUEUE_NAME,
-  async (job) => {
-    const { phoneNumber } = job.data;
-    console.log(`⏰ Job fired: ${job.name} [${phoneNumber}]`);
-
-    switch (job.name) {
-      case JOB.MANUAL_TO_AI:
-        await transitionManualToAI(phoneNumber);
-        break;
-      case JOB.AI_TO_COOLDOWN:
-        await transitionAIToCooldown(phoneNumber);
-        break;
-      case JOB.COOLDOWN_TO_IDLE:
-        await transitionCooldownToIdle(phoneNumber);
-        break;
-      default:
-        console.warn(`Unknown job: ${job.name}`);
-    }
-  },
-  {
-    connection: getWaBullConnection(),
-    concurrency: 5,
-  }
-);
-
-waTimerWorker.on("failed", (job, err) => {
-  console.error(`❌ Job ${job?.name} failed:`, err.message);
-});
-
-waTimerWorker.on("error", (err) => {
-  console.error("❌ Worker error:", err.message);
-});
-
-console.log("🚀 BullMQ worker started");
-
-// ---- Webhook Routes ----
+// ---- Webhook Verification (GET) ----
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -1867,12 +1541,41 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
+// ---- Webhook Handler (POST) ----
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
+
   try {
-    await processWebhook(req.body);
+    const body = req.body;
+    if (body.object !== "whatsapp_business_account") return;
+
+    const entry = body.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+    if (!value) return;
+
+    const messages = value.messages;
+    if (!Array.isArray(messages)) return;
+
+    for (const message of messages) {
+      if (message.type !== "text") continue;
+
+      const from = message.from;
+      const text = message.text?.body;
+      if (!from || !text) continue;
+
+      console.log(`📩 [${from}] ${text}`);
+
+      try {
+        const reply = await askGroq(text);
+        await waSendText(from, reply);
+        console.log(`📤 [${from}] Reply: ${reply}`);
+      } catch (err) {
+        console.error(`Reply failed [${from}]:`, err.message);
+      }
+    }
   } catch (err) {
-    console.error("Webhook handler error:", err.message);
+    console.error("Webhook error:", err.message);
   }
 });
 
@@ -1886,3 +1589,4 @@ app.post("/webhook", async (req, res) => {
 app.listen(5000, () => {
   console.log("🚀 Automation Routes Server Running on PORT 5000");
 });
+
