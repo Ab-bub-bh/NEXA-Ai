@@ -16,9 +16,21 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+console.log("🔥🔥🔥 SERVER.JS LOADED - WhatsApp Cloud API v2");
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+app.post("/test-webhook", (req, res) => {
+  console.log("TEST POST RECEIVED");
+  console.log(req.body);
+
+  res.status(200).json({
+    success: true,
+    message: "POST reached Render"
+  });
+});
 
 
 
@@ -1552,6 +1564,7 @@ app.post("/webhook", async (req, res) => {
 
     const entry = body.entry?.[0];
     const change = entry?.changes?.[0];
+
     const value = change?.value;
     if (!value) return;
 
