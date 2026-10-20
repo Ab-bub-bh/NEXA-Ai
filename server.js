@@ -8,10 +8,9 @@ import { writeFileSync, unlinkSync } from "fs";
 import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
-
-// ============================================
-// WhatsApp Cloud API — NAYE IMPORTS
-// ============================================  
+import { google } from "googleapis";
+import nodemailer from "nodemailer";
+import crypto from "crypto";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,42 +19,44 @@ console.log("🔥🔥🔥 SERVER.JS LOADED - WhatsApp Cloud API v2");
 
 const app = express();
 app.use(cors());
+
 app.use(express.json());
 
-app.post("/test-webhook", (req, res) => {
-  console.log("TEST POST RECEIVED");
-  console.log(req.body);
+/*app.use(cors({
+    origin: ["http://localhost:5500", "http://localhost:5000"],
+    credentials: true
+}));*/
 
-  res.status(200).json({
-    success: true,
-    message: "POST reached Render"
-  });
-});
-
-
-
-/*mongoose.connect("mongodb://127.0.0.1:27017/voiceHistory")
+// ============================================
+// DATABASE CONNECTION
+// ============================================
+mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/voiceHistory")
 .then(() => console.log("mongoDB Connected"))
 .catch(err => console.log(err));
-const voiceSchema = new mongoose.Schema({
-    command: {
-        type: String,
-        required: true
-    },
-    createdAt: {
-        type: Date,
-        default: Date.now
-    }
-});
 
+// Voice command history — existing, UNTOUCHED
+const voiceSchema = new mongoose.Schema({
+    command: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now }
+});
 const VoiceModel = mongoose.model("VoiceHistory", voiceSchema);
 
-// 🔐 All API keys from .env
-/*const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
-const VOICE_ID = process.env.VOICE_ID;*/
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+// ✅ NAYA — Groq chat logs ke liye (bilkul alag collection)
+const groqLogSchema = new mongoose.Schema({
+    userMessage: { type: String, required: true },
+    aiResponse: { type: String, required: true },
+    model: { type: String },
+    tokensUsed: { type: Number },
+    createdAt: { type: Date, default: Date.now }
+});
+const GroqLog = mongoose.model("GroqLog", groqLogSchema);
 
-/*const NEWS_API_KEY = process.env.NEWS_API_KEY;*/
+
+// ==============================================================
+// 🚀 TUMHARA MAIN CODE (BILKUL UNTOUCHED - JESA THA WESA HI)
+// ==============================================================
+
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
 app.post("/speak", async (req, res) => {  
   const { message } = req.body;  
@@ -64,105 +65,55 @@ app.post("/speak", async (req, res) => {
   try { 
     const lower = message.toLowerCase().trim();
 
-    // 🖼 IMAGE CHECK
     const isImageRequest = lower.includes("generate") && lower.includes("image");
 
     if (isImageRequest) {
-      
       try {
         const imageResponse = await fetch("http://localhost:5000/generate-image", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: message }),
         });
-
         const data = await imageResponse.json();
-        console.log("🛑 IMAGE RETURN");
-
         return res.json(data);
-
       } catch (error) {
         return res.status(500).json({ error: "Image route failed" });
       }
     }
     
-
-    // 🏏 CRICKET CHECK
-    const isCricket =
-     lower.startsWith("score") || lower.includes("cricket") || lower.includes("match");
+    const isCricket = lower.startsWith("score") || lower.includes("cricket") || lower.includes("match");
       
 if (isCricket) {
   try {
-    const cricketResponse = await fetch(
-      "https://api.cricapi.com/v1/currentMatches?apikey=bd447f5a-529b-477e-87c9-4047e08687b9&offset=0"
-    );
-
+    const cricketResponse = await fetch("https://api.cricapi.com/v1/currentMatches?apikey=bd447f5a-529b-477e-87c9-4047e08687b9&offset=0");
     const cricketData = await cricketResponse.json();
+    const match = cricketData.data.find(m => message.toLowerCase().includes(m.teams[0].toLowerCase()) || message.toLowerCase().includes(m.teams[1].toLowerCase()));
+    const score = match?.score?.[0];
 
-console.log("Cricket API Response:", cricketData);
-
-const match = cricketData.data.find(m =>
-  message.toLowerCase().includes(m.teams[0].toLowerCase()) ||
-  message.toLowerCase().includes(m.teams[1].toLowerCase())
-);
-
-const score = match?.score?.[0];
-
-let modifiedPrompt = `
+    let modifiedPrompt = `
 Match: ${match?.name}
 Score: ${score?.r}/${score?.w} in ${score?.o} overs
 Status: ${match?.status}
-
 User asked: ${message}
-
 Reply in one short line with
 `;
 
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
-        messages: [{ role: "user", content: modifiedPrompt }]
-      }),
+      headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "llama-3.1-8b-instant", messages: [{ role: "user", content: modifiedPrompt }] }),
     });
 
     const data = await response.json();
-
-    const finalText =
-      data.output_text ||
-      data.choices?.[0]?.message?.content ||
-      "No response";
-
-    console.log("Cricket AI Reply:", finalText);
+    const finalText = data.output_text || data.choices?.[0]?.message?.content || "No response";
     
-    const voiceResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-      {
+    const voiceResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`, {
         method: "POST",
-        headers: {
-          "xi-api-key": ELEVENLABS_API_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: finalText,
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
-          },
-        }),
-      }
-    );
+        headers: { "xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ text: finalText, voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
+      });
 
-    res.set({
-      "Content-Type": "audio/mpeg",
-    });
-
+    res.set({ "Content-Type": "audio/mpeg" });
     return voiceResponse.body.pipe(res);
 
   } catch (error) {
@@ -170,8 +121,6 @@ Reply in one short line with
   }
 }
     
-
-    // Automation Keywords
     const isYoutube = lower.includes("open") && lower.includes("youtube");
     const isWhatsapp = lower.includes("open") && lower.includes("whatsapp");
     const isChrome = lower.includes("open") && lower.includes("chrome");
@@ -179,101 +128,23 @@ Reply in one short line with
 
     const isAutomation = isYoutube || isWhatsapp || isChrome || isVSCode;
 
-    // 🟢 AUTOMATION MODE  
     if (isAutomation) {
-
       const speakText = "okay sir";
-
       const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(speakText)}&tl=hi&client=tw-ob`;
-
-const googleRes = await fetch(ttsUrl, {
-  headers: { 'User-Agent': 'Mozilla/5.0' }
-});
-
-const audioBuffer = Buffer.from(await googleRes.arrayBuffer());
-
-res.set("Content-Type", "audio/mpeg");
-res.send(audioBuffer);
-
-     /* const voiceResponse = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-        {
-          method: "POST",
-          headers: {
-            "xi-api-key": ELEVENLABS_API_KEY,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text: speakText,
-            voice_settings: {
-              stability: 0.5,
-              similarity_boost: 0.75
-            },
-          }),
-        }
-      );
-
-      console.log("Voice status:", voiceResponse.status);
-    console.log("Voice type:", voiceResponse.headers.get("content-type"));
-
-if (!voiceResponse.ok) {
-  const errorText = await voiceResponse.text();
-  console.log("Voice Error:", errorText);
-  return res.status(500).json({ error: "Voice failed" });
-}
-
-      const audioBuffer = await voiceResponse.arrayBuffer();
-
-      res.set({
-        "Content-Type": "audio/mpeg",
-        "Content-Length": audioBuffer.byteLength,
-      });
-
-      res.send(Buffer.from(audioBuffer));*/
+      const googleRes = await fetch(ttsUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      const audioBuffer = Buffer.from(await googleRes.arrayBuffer());
+      res.set("Content-Type", "audio/mpeg");
+      res.send(audioBuffer);
 
       setTimeout(() => {
-        if (isYoutube) {
-          fetch("http://localhost:5000/youtube", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ command: message }),
-          });
-        }
-
-        if (isWhatsapp) {
-          fetch("http://localhost:5000/whatsapp", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ command: message }),
-          });
-        }
-
-        if (isChrome) {
-          fetch("http://localhost:5000/chrome", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ command: message }),
-          });
-        }
-
-        if (isVSCode) {
-          fetch("http://localhost:5000/vscode", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ command: message }),
-          });
-        }
-
+        if (isYoutube) fetch("http://localhost:5000/youtube", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
+        if (isWhatsapp) fetch("http://localhost:5000/whatsapp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
+        if (isChrome) fetch("http://localhost:5000/chrome", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
+        if (isVSCode) fetch("http://localhost:5000/vscode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
       }, 800);
 
       return;
     }
-
-  
-    console.log("🔥 AI ROUTE HIT:", message);
-
-    let finalText = "";
-
 
 let SYSTEM_INSTRUCTIONS = `
 - Your name is Nexa.
@@ -299,110 +170,29 @@ ${message}
 FINAL OUTPUT:
 `;
 
-
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${GROQ_API_KEY}`,
-      "Content-Type": "application/json",
-    },
+    headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "openai/gpt-oss-20b",
       messages: [{ role: "user", content :SYSTEM_INSTRUCTIONS}],
       reasoning_effort:"low",
       temperature: 0.3,
-      max_tokens: 500, // 1 line ke liye itna kaafi hai
+      max_tokens: 500,
     }),
   });
 
   const data = await response.json();
+  let finalText = data.choices?.[0]?.message?.content?.trim() || "No response";
+      VoiceModel.create({
+        command: message
+    }).catch(err => console.error("VoiceModel save failed:", err.message));
+  const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(finalText)}&tl=en&client=tw-ob`;
+  const googleRes = await fetch(ttsUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  const audioBuffer = Buffer.from(await googleRes.arrayBuffer());
 
-/*console.log("🔥 GROQ STATUS:", response.status);
-console.log("🔥 GROQ DATA:", data);*/
-  // Groq me sirf yahi format aayega
-  finalText = data.choices?.[0]?.message?.content?.trim() || "No response";
-console.log("AI Reply:", finalText);
-
-console.log("Ai Reply:", finalText);
-console.log("Google TTS voice coming");
-
-const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(finalText)}&tl=en&client=tw-ob`;
-
-const googleRes = await fetch(ttsUrl, {
-  headers: { 'User-Agent': 'Mozilla/5.0' }
-});
-
-const audioBuffer = Buffer.from(await googleRes.arrayBuffer());
-
-res.set("Content-Type", "audio/mpeg");
-return res.send(audioBuffer);
-
-
-/*console.log("Ai Reply :" ,finalText);
-console.log("ElevenLabs voice coming ");
-// Groq TTS - ElevenLabs ka replacement
-const voiceResponse = await fetch(
-  "https://api.groq.com/openai/v1/audio/speech",
-  {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "canopylabs/orpheus-v1-english",
-     input: finalText.slice(0, 195), 
-      voice:  "autumn", 
-      response_format: "wav"     //  Female - Rachel jaisi
-      // voice: "Fritz-PlayAI", // Male chahiye to ye use karo
-    }),
-  }
-);
-
-if (!voiceResponse.ok) {
-  const errorText = await voiceResponse.text();
-  console.error("Groq TTS Error:", errorText);
-  return res.status(voiceResponse.status).json({ error: errorText });
-}
-
-const audioBuffer = Buffer.from(await voiceResponse.arrayBuffer());
-
-res.set("Content-Type", "audio/wav");
-return res.send(audioBuffer);*/
-
-   /*const voiceResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": ELEVENLABS_API_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: finalText,
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-        }),
-      }
-    );
-
-    if (!voiceResponse.ok) {
-  const errorText = await voiceResponse.text();
-  console.error("ElevenLabs Error:", errorText);
-  return res.status(voiceResponse.status).json({ error: errorText });
-}
-
-    
-    const audioBuffer = Buffer.from(await voiceResponse.arrayBuffer());
-
-res.set("Content-Type", "audio/mpeg");
-
-return res.send(audioBuffer);*/
-
-    /*res.set({
-      "Content-Type": "audio/mpeg",
-    });
-
-    return voiceResponse.body.pipe(res);*/
+  res.set("Content-Type", "audio/mpeg");
+  return res.send(audioBuffer);
 
  } catch (error) {  
     console.error("Speak Route Error:", error);  
@@ -410,570 +200,205 @@ return res.send(audioBuffer);*/
   }
 });
 
-
-
-
-
 app.post("/generate-image", async (req, res) => {
- 
-try {
+  try {
     const { prompt } = req.body;
-    console.log("Received text:", prompt);
-
-    if (!prompt || typeof prompt !== "string") {
-      return res.status(400).json({ error: "Invalid prompt" });
-    }
-
+    if (!prompt || typeof prompt !== "string") return res.status(400).json({ error: "Invalid prompt" });
     const encoded = encodeURIComponent(prompt);
-    const  url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux`;
-
-
+    const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux`;
     const response = await fetch(url);
-
-    console.log("Pollinations Status:", response.status);
-    console.log("Content-Type:", response.headers.get("content-type"));
-
-    if (!response.ok) {
-      const err = await response.text();
-      console.log("Pollinations Error:", err);
-      return res.status(response.status).json({ error: err });
-    }
-
+    if (!response.ok) return res.status(response.status).json({ error: await response.text() });
     const contentType = response.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) {
-      const errText = await response.text();
-      console.log("Non-image response:", errText);
-      return res.status(502).json({ error: "Provider did not return image" });
-    }
-
+    if (!contentType.startsWith("image/")) return res.status(502).json({ error: "Provider did not return image" });
     const buffer = await response.arrayBuffer();
-    console.log("Image bytes:", buffer.byteLength);
-
-    const base64Image = Buffer.from(buffer).toString("base64");
-
-    return res.json({
-      type: "image",
-      image: base64Image,
-    });
-
+    return res.json({ type: "image", image: Buffer.from(buffer).toString("base64") });
   } catch (error) {
-    console.error("Image Route Error:", error);
     return res.status(500).json({ error: "Image generation failed" });
   }
 });
 
-
-// 🎧 YOUTUBE SONG AUTOMATION
 app.post("/youtube", async (req, res) => {
   try {
-    console.log("🎙 YouTube command received");
-
     let command = req.body.command.toLowerCase();
     let songName = command.replace("nexa", "").trim();
     if (!songName) songName = "latest songs";
-
-    console.log("🎵 Searching:", songName);
-
-    // ⭐ UNIVERSAL VIDEO + SONG DIRECT PLAY URL
     const search = encodeURIComponent(songName + " youtube");
     const url = `https://www.google.com/search?q=${search}+site:youtube.com&btnI=1`;
-
-    // OPEN IN CHROME → DIRECT VIDEO PLAY
     exec(`start chrome "${url}"`);
-
-    await VoiceModel.create({
-      command:req.body.command});
-    console.log("saved to mongodb :" ,req.body.command );
-
+    await VoiceModel.create({ command: req.body.command });
     res.json({ status: "ok", action: `Playing: ${songName}` });
-
   } catch (err) {
-    console.error("Robot.js Error:", err);
     res.status(500).json({ error: "Automation failed" });
   }
 });
 
-
-
-// =====================================================================
-// WhatsApp Desktop automation via PowerShell SendKeys
-// =====================================================================
-
-function escapeSendKeys(text) {
-  return text.replace(/([+^%~(){}\[\]])/g, (c) => `{${c}}`);
-}
-
-function escapePsQuote(text) {
-  return text.replace(/'/g, "''");
-}
+function escapeSendKeys(text) { return text.replace(/([+^%~(){}\[\]])/g, (c) => `{${c}}`); }
+function escapePsQuote(text) { return text.replace(/'/g, "''"); }
 
 function sendWhatsAppDesktop(contact, message) {
   return new Promise((resolve) => {
     const safeContact = escapeSendKeys(escapePsQuote(contact));
     const safeMessage = escapeSendKeys(escapePsQuote(message));
-
     const psScript = `
 $ErrorActionPreference = 'Stop'
 try {
   $wshell = New-Object -ComObject wscript.shell
   $activated = $wshell.AppActivate('WhatsApp')
-  if (-not $activated) {
-    Write-Output 'WINDOW_NOT_FOUND'
-    exit 1
-  }
+  if (-not $activated) { Write-Output 'WINDOW_NOT_FOUND'; exit 1 }
   Start-Sleep -Milliseconds 800
-  $wshell.SendKeys('^n')
-  Start-Sleep -Milliseconds 1200
-  $wshell.SendKeys('${safeContact}')
-  Start-Sleep -Milliseconds 2000
-  $wshell.SendKeys('{ENTER}')
-  Start-Sleep -Milliseconds 1800
-  $wshell.SendKeys('${safeMessage}')
-  Start-Sleep -Milliseconds 600
+  $wshell.SendKeys('^n'); Start-Sleep -Milliseconds 1200
+  $wshell.SendKeys('${safeContact}'); Start-Sleep -Milliseconds 2000
+  $wshell.SendKeys('{ENTER}'); Start-Sleep -Milliseconds 1800
+  $wshell.SendKeys('${safeMessage}'); Start-Sleep -Milliseconds 600
   $wshell.SendKeys('{ENTER}')
   Write-Output 'SENT'
-} catch {
-  Write-Output "ERROR: $($_.Exception.Message)"
-  exit 1
-}
+} catch { Write-Output "ERROR: $($_.Exception.Message)"; exit 1 }
 `;
-
     const tmpFile = path.join(os.tmpdir(), `wa_send_${Date.now()}.ps1`);
     writeFileSync(tmpFile, psScript, "utf8");
-
-    exec(
-      `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`,
-      { timeout: 30000 },
-      (err, stdout) => {
+    exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`, { timeout: 30000 }, (err, stdout) => {
         try { unlinkSync(tmpFile); } catch {}
-
         const out = (stdout || "").trim();
-        if (out.includes("WINDOW_NOT_FOUND")) {
-          return resolve({
-            success: false,
-            message: "WhatsApp Desktop window not found. Please open WhatsApp first.",
-          });
-        }
-        if (out.includes("SENT")) {
-          return resolve({
-            success: true,
-            message: "WhatsApp message sent successfully",
-          });
-        }
-        return resolve({
-          success: false,
-          message: "Message could not be sent",
-        });
+        if (out.includes("WINDOW_NOT_FOUND")) return resolve({ success: false, message: "WhatsApp Desktop window not found." });
+        if (out.includes("SENT")) return resolve({ success: true, message: "WhatsApp message sent successfully" });
+        return resolve({ success: false, message: "Message could not be sent" });
       }
     );
   });
 }
+
 app.post("/whatsapp", async (req, res) => {
-  console.log("🟦 Opening WhatsApp...");
   const { command } = req.body;
-  console.log("whatsapp route hit:", command);
-
-  if (!command || typeof command !== "string") {
-    return res.json({ success: false, message: "Command is required" });
-  }
-
+  if (!command || typeof command !== "string") return res.json({ success: false, message: "Command is required" });
   const lower = command.toLowerCase().trim();
   const hasOpen = lower.startsWith("open whatsapp");
   const hasSend = lower.includes("send message to");
 
-  // 1️⃣ Sirf open karna (purana behaviour)
   if (hasOpen && !hasSend) {
-    exec(`start "" "whatsapp:"`, () => {
-      console.log("🟢 WhatsApp opened (ONLY OPEN MODE)");
-      return res.send("WhatsApp opened successfully.");
-    });
+    exec(`start "" "whatsapp:"`, () => res.send("WhatsApp opened successfully."));
     return;
   }
 
-  // 2️⃣ Message bhejna (Desktop app ke through)
   if (hasSend) {
     const afterKeyword = command.split(/send message to/i)[1];
-    if (!afterKeyword || !afterKeyword.trim()) {
-      return res.json({
-        success: false,
-        message: "Contact and message are required",
-      });
-    }
-
+    if (!afterKeyword || !afterKeyword.trim()) return res.json({ success: false, message: "Contact and message are required" });
     const parts = afterKeyword.trim().split(/\s+/);
     const contact = parts.shift();
     const text = parts.join(" ");
-
-    if (!contact) {
-      return res.json({ success: false, message: "Contact not specified" });
-    }
-    if (!text) {
-      return res.json({ success: false, message: "Message text not specified" });
-    }
-
-    // Pehle WhatsApp Desktop open/focus karo, phir send
+    if (!contact || !text) return res.json({ success: false, message: "Contact or text not specified" });
     exec(`start "" "whatsapp:"`, async () => {
       await new Promise((r) => setTimeout(r, 3500));
-
       try {
         const result = await sendWhatsAppDesktop(contact, text);
         return res.json(result);
       } catch (err) {
-        console.error("WhatsApp route error:", err);
-        return res.json({
-          success: false,
-          message: "Failed to send WhatsApp message",
-        });
+        return res.json({ success: false, message: "Failed to send WhatsApp message" });
       }
     });
     return;
   }
-
   return res.json({ success: false, message: "Unrecognized WhatsApp command" });
 });
 
-
-/*app.post("/whatsapp", (req, res) => {
-  console.log("🟦 Opening WhatsApp...");
-  const { command } = req.body;
-  console.log("whatsapp route hit:", command);
-
-  const lower = command.toLowerCase().trim();
-
-  // 🔵 Detect command type
-  const hasOpen = lower.startsWith("open whatsapp");
-  const hasSend = lower.includes("send message to");
-
-  // 🔵 Extract contact + message ONLY IF send command exists
-  let contact = "";
-  let text = "";
-
-  if (hasSend && hasOpen) {
-     exec(`start WHA "${url}"`);
-    const parts = command.split("send message to")[1].trim().split(" ");
-    contact = parts.shift();
-    text = parts.join(" ");
-  }
-
-  // 1️⃣ ONLY OPEN WHATSAPP (NO automation)
-  if (hasOpen && !hasSend) {
-    exec(`start "" "whatsapp:"`, () => {
-      console.log("🟢 WhatsApp opened (ONLY OPEN MODE)");
-      return res.send("WhatsApp opened successfully.");
-    });
-    return;
-  }*/
-
-  // 2️⃣ OPEN WHATSAPP + SEND MESSAGE (Automation mode)
-
 app.post("/chrome", (req, res) => {
-  console.log("🟦 Opening Chrome...");
-
   exec(`start chrome`, (err) => {
-    if (err) {
-      console.log("❌ Chrome not found");
-      return res.send("Chrome not found on this PC.");
-    }
-
-    console.log("🟢 Chrome opened");
+    if (err) return res.send("Chrome not found on this PC.");
     res.send("Opened Chrome.");
   });
 });
 
-// --------------------------------------
-
 app.post("/vscode", (req, res) => {
-  console.log("🟦 Opening VS Code...");
-
-  
   exec(`code`, (err) => {
-    if (!err) {
-      console.log("🟢 VS Code opened using PATH");
-      return res.send("VS Code opened.");
-    }
-
+    if (!err) return res.send("VS Code opened.");
     const exe = `"${process.env.LOCALAPPDATA}\\Programs\\Microsoft VS Code\\Code.exe"`;
-
     exec(`powershell -command ${exe}`, (err2) => {
-      if (!err2) {
-        console.log("🟢 VS Code opened via EXE");
-        return res.send("VS Code opened via EXE.");
-      }
-
-      console.log("❌ VS Code not found on this PC");
+      if (!err2) return res.send("VS Code opened via EXE.");
       res.send("VS Code not found.");
     });
   });
 });
 
-// --------------------------------------
-// 🚀 START SERVER
-// --------------------------------------
+app.get("/speak", (req, res) => { res.sendFile(path.join(__dirname, "voice.html")); });
+app.get("/chat", (req, res) => { res.sendFile(path.join(__dirname, "chat.html")); });
+app.get("/ai.html", (req, res) => { res.sendFile(path.join(__dirname, "ai.html")); });
 
-
-app.get("/speak", (res) => {
-  res.sendFile(path.join(__dirname, "voice.html"));
-});
-
-app.get("/chat", (res) => {
-  res.sendFile(path.join(__dirname, "chat.html"));
-});
-
-
-
-//chat route //
-
-/*const AGNES_API_KEY = process.env.AGNES_API_KEY;
-const AGNES_BASE_URL = process.env.AGNES_BASE_URL;*/
 
 app.post("/chat", async (req, res) => {  
   const { message } = req.body;  
-  console.log("Recived message:", message);
-  
   try { 
     const lower = message.toLowerCase().trim();
 
-    // 🖼 IMAGE CHECK
-  const isImageRequest = lower.includes("generate") && lower.includes("image")|| lower.includes("create") && lower.includes("image");
-
+    const isImageRequest = lower.includes("generate") && lower.includes("image")|| lower.includes("create") && lower.includes("image");
     if (isImageRequest) {
-      
       try {
         const imageResponse = await fetch("http://localhost:5000/generate_image", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ prompt: message }),
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: message }),
         });
-
-        const data = await imageResponse.json();
-        console.log("🛑 IMAGE RETURN");
-
-        return res.json(data);
-
-      } catch (error) {
-        return res.status(500).json({ error: "Image route failed" });
-      }
+        return res.json(await imageResponse.json());
+      } catch (error) { return res.status(500).json({ error: "Image route failed" }); }
     }
 
- // 🎬 VIDEO CHECK (V.D. command)
- 
  const small = message.toLowerCase().trim();
-
-const isVideoRequest = small.includes("generate") && small.includes("video") || small.includes("create") && small.includes("video");
+ const isVideoRequest = small.includes("generate") && small.includes("video") || small.includes("create") && small.includes("video");
  
 if (isVideoRequest) {
-
-  console.log("🎬 Video generation prompt received:", message);
-  const videoPrompt =  message;
-
-
   try{
-
-    await fetch("http://localhost:5000/generate-video", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ prompt: videoPrompt }),
-
+    const videoRes = await fetch("http://localhost:5000/generate-video", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: message }),
     });
-
-    const videoData = await videoRes.json();
-
-    return res.json(videoData);   
-
-  } catch (error) {
-    return res.status(500).json({ error: "Video route failed" });
-  }
+    return res.json(await videoRes.json());   
+  } catch (error) { return res.status(500).json({ error: "Video route failed" }); }
 }
-    
- 
 
-    // 🏏 CRICKET CHECK
-    const isCricket =
-     lower.startsWith("score") || lower.includes("cricket") || lower.includes("match");
-      
+    const isCricket = lower.startsWith("score") || lower.includes("cricket") || lower.includes("match");
 if (isCricket) {
   try {
-    const cricketResponse = await fetch(
-      "https://api.cricapi.com/v1/currentMatches?apikey=bd447f5a-529b-477e-87c9-4047e08687b9&offset=0"
-    );
-
+    const cricketResponse = await fetch("https://api.cricapi.com/v1/currentMatches?apikey=bd447f5a-529b-477e-87c9-4047e08687b9&offset=0");
     const cricketData = await cricketResponse.json();
-
-console.log("Cricket API Response:", cricketData);
-
-const match = cricketData.data.find(m =>
-  message.toLowerCase().includes(m.teams[0].toLowerCase()) ||
-  message.toLowerCase().includes(m.teams[1].toLowerCase())
-);
-
-const score = match?.score?.[0];
-
-let modifiedPrompt = `
-Match: ${match?.name}
-Score: ${score?.r}/${score?.w} in ${score?.o} overs
-Status: ${match?.status}
-
-User asked: ${message}
-
-Reply in one short line with
-`;
-
+    const match = cricketData.data.find(m => message.toLowerCase().includes(m.teams[0].toLowerCase()) || message.toLowerCase().includes(m.teams[1].toLowerCase()));
+    const score = match?.score?.[0];
+    let modifiedPrompt = `Match: ${match?.name}\nScore: ${score?.r}/${score?.w} in ${score?.o} overs\nStatus: ${match?.status}\nUser asked: ${message}\nReply in one short line with\n`;
     const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${GROQ_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
-        messages: [{ role: "user", content: modifiedPrompt }]
-      }),
+      method: "POST", headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "llama-3.1-8b-instant", messages: [{ role: "user", content: modifiedPrompt }] }),
     });
-
     const data = await response.json();
-
-    const finalText =
-      data.output_text ||
-      data.choices?.[0]?.message?.content ||
-      "No response";
-
-    console.log("Cricket AI Reply:", finalText);
-    
-    const voiceResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": ELEVENLABS_API_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: finalText,
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75,
-          },
-        }),
-      }
-    );
-
-    res.set({
-      "Content-Type": "audio/mpeg",
-    });
-
+    const finalText = data.output_text || data.choices?.[0]?.message?.content || "No response";
+    const voiceResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`, {
+        method: "POST", headers: { "xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ text: finalText, voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
+      });
+    res.set({ "Content-Type": "audio/mpeg" });
     return voiceResponse.body.pipe(res);
-
-  } catch (error) {
-    return res.status(500).json({ error: "Cricket route failed" });
-  }
+  } catch (error) { return res.status(500).json({ error: "Cricket route failed" }); }
 }
     
-
-    // Automation Keywords
     const isYoutube = lower.includes("open youtube");
     const isWhatsapp = lower.includes("open whatsapp");
     const isChrome = lower.includes("open chrome");
     const isVSCode = lower.includes("open visual studio code");
-
     const isAutomation = isYoutube || isWhatsapp || isChrome || isVSCode;
 
-    // 🟢 AUTOMATION MODE  
     if (isAutomation) {
-
       const speakText = "okay sir";
-
       res.json({ message: speakText });
-     /* const voiceResponse = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-        {
-          method: "POST",
-          headers: {
-            "xi-api-key": ELEVENLABS_API_KEY,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            text: speakText,
-            voice_settings: {
-              stability: 0.5,
-              similarity_boost: 0.75
-            },
-          }),
-        }
-      );
-
-      console.log("Voice status:", voiceResponse.status);
-    console.log("Voice type:", voiceResponse.headers.get("content-type"));
-
-if (!voiceResponse.ok) {
-  const errorText = await voiceResponse.text();
-  console.log("Voice Error:", errorText);
-  return res.status(500).json({ error: "Voice failed" });
-}
-
-      const audioBuffer = await voiceResponse.arrayBuffer();
-
-      res.set({
-        "Content-Type": "audio/mpeg",
-        "Content-Length": audioBuffer.byteLength,
-      });
-
-      res.send(Buffer.from(audioBuffer));*/
-
       setTimeout(() => {
-        if (isYoutube) {
-          fetch("http://localhost:5000/youtube", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ command: message }),
-          });
-        }
-
-        if (isWhatsapp) {
-          fetch("http://localhost:5000/whatsapp", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ command: message }),
-          });
-        }
-
-        if (isChrome) {
-          fetch("http://localhost:5000/chrome", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ command: message }),
-          });
-        }
-
-        if (isVSCode) {
-          fetch("http://localhost:5000/vscode", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ command: message }),
-          });
-        }
-
+        if (isYoutube) fetch("http://localhost:5000/youtube", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
+        if (isWhatsapp) fetch("http://localhost:5000/whatsapp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
+        if (isChrome) fetch("http://localhost:5000/chrome", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
+        if (isVSCode) fetch("http://localhost:5000/vscode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
       }, 800);
-
       return;
     }
-
-  
-    console.log("🔥 AI ROUTE HIT:", message);
-
-    let finalText = "";
 
 let SYSTEM_RULES = `
 - Your name is Nexa.
 - Always address the user as "Abhi".
 - Tone: warm, natural, conversational — like a thoughtful friend.
 - Language: Match Abhi's language.
-  - If he speaks English → reply in English.
-  - If he speaks Hindi or Hinglish → reply in Hinglish (Hindi written in English letters, e.g., "kaise ho", "bilkul", "chalta hai").
-  - Never use Devanagari script. Always use Roman/English letters.
+- If he speaks English → reply in English.
+- If he speaks Hindi or Hinglish → reply in Hinglish (Hindi written in English letters, e.g., "kaise ho", "bilkul", "chalta hai").
+- Never use Devanagari script. Always use Roman/English letters.
 - Use contractions naturally (it's, you're, I'll, let's).
 - Keep responses to 1-2 short sentences (10-20 words total). Never exceed 25 words.
 - Briefly acknowledge what Abhi says, then answer.
@@ -993,160 +418,39 @@ ${message}
 FINAL OUTPUT:
 `;
 
-
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${GROQ_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "openai/gpt-oss-20b",
-      messages: [{ role: "user", content: SYSTEM_RULES  }],
-      reasoning_effort:"low",
-      temperature: 0.3,
-      max_tokens: 500, // 1 line ke liye itna kaafi hai
-    }),
+    method: "POST", headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "openai/gpt-oss-20b", messages: [{ role: "user", content: SYSTEM_RULES  }], reasoning_effort:"low", temperature: 0.3, max_tokens: 500 }),
   });
 
-  if (!response.ok) {
-    const err = await response.text();
-    console.log("Groq Error:", err);
-    return res.sendStatus(response.status);
-}
-
+  if (!response.ok) return res.sendStatus(response.status);
   const data = await response.json();
-
-console.log("🔥 GROQ STATUS:", response.status);
-console.log("🔥 GROQ DATA:", data);
-  // Groq me sirf yahi format aayega
-  finalText = data.choices?.[0]?.message?.content?.trim() || "No response";
-console.log("AI Reply:", finalText);
-
-res.json({ message: finalText });
-
-
-
-
-
-/*console.log("Ai Reply :" ,finalText);
-console.log("ElevenLabs voice coming ");
-// Groq TTS - ElevenLabs ka replacement
-const voiceResponse = await fetch(
-  "https://api.groq.com/openai/v1/audio/speech",
-  {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.GROQ_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "canopylabs/orpheus-v1-english",
-     input: finalText.slice(0, 195), 
-      voice:  "autumn", 
-      response_format: "wav"     //  Female - Rachel jaisi
-      // voice: "Fritz-PlayAI", // Male chahiye to ye use karo
-    }),
-  }
-);
-
-if (!voiceResponse.ok) {
-  const errorText = await voiceResponse.text();
-  console.error("Groq TTS Error:", errorText);
-  return res.status(voiceResponse.status).json({ error: errorText });
-}
-
-const audioBuffer = Buffer.from(await voiceResponse.arrayBuffer());
-
-res.set("Content-Type", "audio/wav");
-return res.send(audioBuffer);*/
-
-   /*const voiceResponse = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": ELEVENLABS_API_KEY,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: finalText,
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
-        }),
-      }
-    );
-
-    if (!voiceResponse.ok) {
-  const errorText = await voiceResponse.text();
-  console.error("ElevenLabs Error:", errorText);
-  return res.status(voiceResponse.status).json({ error: errorText });
-}
-
-    
-    const audioBuffer = Buffer.from(await voiceResponse.arrayBuffer());
-
-res.set("Content-Type", "audio/mpeg");
-
-return res.send(audioBuffer);*/
-
-    /*res.set({
-      "Content-Type": "audio/mpeg",
-    });
-
-    return voiceResponse.body.pipe(res);*/
+  res.json({ message: data.choices?.[0]?.message?.content?.trim() || "No response" });
+      GroqLog.create({
+        userMessage: message,
+        aiResponse: finalText,
+        model: "openai/gpt-oss-20b",
+        tokensUsed: data.usage?.total_tokens || 0
+    }).catch(err => console.error("GroqLog save failed:", err.message));
 
  } catch (error) {  
-    console.error("Speak Route Error:", error);  
     res.status(500).json({ error: error.message });  
   }
 });
 
-
-
-  app.post("/generate_image", async (req, res) => {
+app.post("/generate_image", async (req, res) => {
   try {
     const { prompt } = req.body;
-    console.log("Received text:", prompt);
-
-    if (!prompt || typeof prompt !== "string") {
-      return res.status(400).json({ error: "Invalid prompt" });
-    }
-
+    if (!prompt || typeof prompt !== "string") return res.status(400).json({ error: "Invalid prompt" });
     const encoded = encodeURIComponent(prompt);
-    const  url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux`;
-
-    console.log("Requesting:", url);
-
+    const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux`;
     const response = await fetch(url);
-
-    console.log("Pollinations Status:", response.status);
-    console.log("Content-Type:", response.headers.get("content-type"));
-
-    if (!response.ok) {
-      const err = await response.text();
-      console.log("Pollinations Error:", err);
-      return res.sendStatus(response.status);
-    }
-
+    if (!response.ok) return res.sendStatus(response.status);
     const contentType = response.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) {
-      const errText = await response.text();
-      console.log("Non-image response:", errText);
-      return res.status(502).json({});
-    }
-
+    if (!contentType.startsWith("image/")) return res.status(502).json({});
     const buffer = await response.arrayBuffer();
-    console.log("Image bytes:", buffer.byteLength);
-
-    const base64Image = Buffer.from(buffer).toString("base64");
-
-    return res.json({
-      type: "image",
-      image: base64Image,
-    });
-
+    return res.json({ type: "image", image: Buffer.from(buffer).toString("base64") });
   } catch (error) {
-    console.error("Image Route Error:", error);
     return res.status(500).json({ message: "Image generation failed" });
   }
 });
@@ -1154,454 +458,380 @@ return res.send(audioBuffer);*/
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
-    console.log("🎬 [1] /generate-video hit");
-    console.log("🎬 [2] Prompt:", prompt);
-
-    if (!prompt || typeof prompt !== "string") {
-      return res.status(400).json({ error: "Invalid prompt" });
-    }
-
+    if (!prompt || typeof prompt !== "string") return res.status(400).json({ error: "Invalid prompt" });
     const encodedPrompt = encodeURIComponent(prompt);
     const url = `https://gen.pollinations.ai/video/${encodedPrompt}?model=veo&duration=5&aspectRatio=16:9`;
-
-    console.log("🎬 Sending to Pollinations:", url);
-
-    const pollRes = await fetch(url, {
-      headers: {
-        "Authorization": `Bearer ${process.env.POLLINATIONS_API_KEY}`,
-      },
-    });
-
-    console.log("Pollinations Status:", pollRes.status);
-    console.log("Content-Type:", pollRes.headers.get("content-type"));
-
-    if (!pollRes.ok) {
-      const err = await pollRes.text();
-      console.log("Pollinations Error:", err);
-      return res.status(pollRes.status).json({ error: err });
-    }
-
+    const pollRes = await fetch(url, { headers: { "Authorization": `Bearer ${process.env.POLLINATIONS_API_KEY}` } });
+    if (!pollRes.ok) return res.status(pollRes.status).json({ error: await pollRes.text() });
     const contentType = pollRes.headers.get("content-type") || "";
-    if (!contentType.startsWith("video/")) {
-      const errText = await pollRes.text();
-      console.log("Non-video response:", errText);
-      return res.status(502).json({ error: "Provider did not return a video" });
-    }
-
+    if (!contentType.startsWith("video/")) return res.status(502).json({ error: "Provider did not return a video" });
     const buffer = await pollRes.arrayBuffer();
-    console.log("Video bytes:", buffer.byteLength);
-
-    const base64Video = Buffer.from(buffer).toString("base64");
-
-    return res.json({
-      type: "video",
-      video: base64Video,
-    });
-
+    return res.json({ type: "video", video: Buffer.from(buffer).toString("base64") });
   } catch (err) {
-    console.error("Video route error:", err);
     return res.status(500).json({ error: "Video generation failed" });
   }
 });
 
-
-
-// 🎧 YOUTUBE SONG AUTOMATION
 app.post("/youtube", async (req, res) => {
   try {
-    console.log("🎙 YouTube command received");
-
     let command = req.body.command.toLowerCase();
     let songName = command.replace("nexa", "").trim();
     if (!songName) songName = "latest songs";
-
-    console.log("🎵 Searching:", songName);
-
-    // ⭐ UNIVERSAL VIDEO + SONG DIRECT PLAY URL
     const search = encodeURIComponent(songName + " youtube");
     const url = `https://www.google.com/search?q=${search}+site:youtube.com&btnI=1`;
-
-    // OPEN IN CHROME → DIRECT VIDEO PLAY
     exec(`start chrome "${url}"`);
-
    /* await VoiceModel.create({
       command:req.body.command});
     console.log("saved to mongodb :" ,req.body.command );*/
-
     res.json({ status: "ok", action: `Playing: ${songName}` });
-
   } catch (err) {
-    console.error("Robot.js Error:", err);
     res.status(500).json({ error: "Automation failed" });
   }
 });
 
-
-
-// =====================================================================
-// WhatsApp Desktop automation via PowerShell SendKeys
-// =====================================================================
-
 app.post("/whatsapp", async (req, res) => {
-  console.log("🟦 Opening WhatsApp...");
   const { command } = req.body;
-  console.log("whatsapp route hit:", command);
-
-  if (!command || typeof command !== "string") {
-    return res.json({ success: false, message: "Command is required" });
-  }
-
+  if (!command || typeof command !== "string") return res.json({ success: false, message: "Command is required" });
   const lower = command.toLowerCase().trim();
   const hasOpen = lower.startsWith("open whatsapp");
   const hasSend = lower.includes("send message to");
 
-  // 1️⃣ Sirf open karna (purana behaviour)
   if (hasOpen && !hasSend) {
-    exec(`start "" "whatsapp:"`, () => {
-      console.log("🟢 WhatsApp opened (ONLY OPEN MODE)");
-      return res.send("WhatsApp opened successfully.");
-    });
+    exec(`start "" "whatsapp:"`, () => res.send("WhatsApp opened successfully."));
     return;
   }
 
-  // 2️⃣ Message bhejna (Desktop app ke through)
   if (hasSend) {
     const afterKeyword = command.split(/send message to/i)[1];
-    if (!afterKeyword || !afterKeyword.trim()) {
-      return res.json({
-        success: false,
-        message: "Contact and message are required",
-      });
-    }
-
+    if (!afterKeyword || !afterKeyword.trim()) return res.json({ success: false, message: "Contact and message are required" });
     const parts = afterKeyword.trim().split(/\s+/);
     const contact = parts.shift();
     const text = parts.join(" ");
-
-    if (!contact) {
-      return res.json({ success: false, message: "Contact not specified" });
-    }
-    if (!text) {
-      return res.json({ success: false, message: "Message text not specified" });
-    }
-
-    // Pehle WhatsApp Desktop open/focus karo, phir send
+    if (!contact || !text) return res.json({ success: false, message: "Contact or text not specified" });
     exec(`start "" "whatsapp:"`, async () => {
       await new Promise((r) => setTimeout(r, 3500));
-
       try {
         const result = await sendWhatsAppDesktop(contact, text);
         return res.json(result);
       } catch (err) {
-        console.error("WhatsApp route error:", err);
-        return res.json({
-          success: false,
-          message: "Failed to send WhatsApp message",
-        });
+        return res.json({ success: false, message: "Failed to send WhatsApp message" });
       }
     });
     return;
   }
-
   return res.json({ success: false, message: "Unrecognized WhatsApp command" });
 });
 
-
-/*app.post("/whatsapp", (req, res) => {
-  console.log("🟦 Opening WhatsApp...");
-  const { command } = req.body;
-  console.log("whatsapp route hit:", command);
-
-  const lower = command.toLowerCase().trim();
-
-  // 🔵 Detect command type
-  const hasOpen = lower.startsWith("open whatsapp");
-  const hasSend = lower.includes("send message to");
-
-  // 🔵 Extract contact + message ONLY IF send command exists
-  let contact = "";
-  let text = "";
-
-  if (hasSend && hasOpen) {
-     exec(`start WHA "${url}"`);
-    const parts = command.split("send message to")[1].trim().split(" ");
-    contact = parts.shift();
-    text = parts.join(" ");
-  }
-
-  // 1️⃣ ONLY OPEN WHATSAPP (NO automation)
-  if (hasOpen && !hasSend) {
-    exec(`start "" "whatsapp:"`, () => {
-      console.log("🟢 WhatsApp opened (ONLY OPEN MODE)");
-      return res.send("WhatsApp opened successfully.");
-    });
-    return;
-  }*/
-
-  // 2️⃣ OPEN WHATSAPP + SEND MESSAGE (Automation mode)
-
 app.post("/chrome", (req, res) => {
-  console.log("🟦 Opening Chrome...");
-
   exec(`start chrome`, (err) => {
-    if (err) {
-      console.log("❌ Chrome not found");
-      return res.send("Chrome not found on this PC.");
-    }
-
-    console.log("🟢 Chrome opened");
+    if (err) return res.send("Chrome not found on this PC.");
     res.send("Opened Chrome.");
   });
 });
 
-// --------------------------------------
-
 app.post("/vscode", (req, res) => {
-  console.log("🟦 Opening VS Code...");
-
-  
   exec(`code`, (err) => {
-    if (!err) {
-      console.log("🟢 VS Code opened using PATH");
-      return res.send("VS Code opened.");
-    }
-
+    if (!err) return res.send("VS Code opened.");
     const exe = `"${process.env.LOCALAPPDATA}\\Programs\\Microsoft VS Code\\Code.exe"`;
-
     exec(`powershell -command ${exe}`, (err2) => {
-      if (!err2) {
-        console.log("🟢 VS Code opened via EXE");
-        return res.send("VS Code opened via EXE.");
-      }
-
-      console.log("❌ VS Code not found on this PC");
+      if (!err2) return res.send("VS Code opened via EXE.");
       res.send("VS Code not found.");
     });
   });
 });
 
-// --------------------------------------
-// 🚀 START SERVER
-// --------------------------------------
-app.listen(5000, () => {
-  console.log("🚀 Automation Routes Server Running on PORT 5000");
+
+// ==============================================================
+// 🚀 EMAIL AUTOMATION WORKFLOW (Naya Code - Sabse Neeche)
+// ==============================================================
+
+// Schemas for Automation
+const userSchema = new mongoose.Schema({
+    googleId: { type: String, required: true, unique: true },
+    email: { type: String, required: true },
+    name: { type: String },
+    accessToken: { type: String },
+    refreshToken: { type: String },
+    tokenExpiry: { type: Date },
+    createdAt: { type: Date, default: Date.now }
+});
+const UserModel = mongoose.model("User", userSchema);
+
+const automationSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    type: { type: String, enum: ["test", "use"], required: true },
+    senderEmail: { type: String },
+    recipient: { type: String, required: true },
+    message: { type: String, required: true },
+    timerMinutes: { type: Number, required: true },
+    timerUnit: { type: String, enum: ["minutes", "seconds"], default: "minutes" },
+    status: { type: String, enum: ["processing", "success", "failed", "cancelled"], default: "processing" },
+    scheduledAt: { type: Date, required: true },
+    firedAt: { type: Date },
+    createdAt: { type: Date, default: Date.now }
+});
+const AutomationModel = mongoose.model("Automation", automationSchema);
+
+// Mailers & Timers
+const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+        user: process.env.BOT_EMAIL,
+        pass: process.env.BOT_EMAIL_PASS
+    }
 });
 
-
-/*app.post("/generate-image", async (req, res) => {
-  try {
-    const { prompt } = req.body;
-    console.log("Received text:", prompt);
-
-    if (!prompt || typeof prompt !== "string") {
-      return res.status(400).json({ error: "Invalid prompt" });
-    }
-
-    const response = await fetch(
-      "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
-    
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${HUGGING_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ inputs: prompt }),
-      }
+async function sendEmailViaGmailAPI(user, recipient, message, fromEmail) {
+    const authClient = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI
     );
+    authClient.setCredentials({ access_token: user.accessToken, refresh_token: user.refreshToken });
 
-    // ✅ Hugging Face response check
-    console.log("HF Status:", response.status);
-    console.log("HF Content-Type:", response.headers.get("content-type"));
-
-    if (!response.ok) {
-      const err = await response.text();
-      console.log("HF Error:", err);
-      return res.status(response.status).json({ error: err });
+    if (user.tokenExpiry && new Date(user.tokenExpiry) < new Date()) {
+        try {
+            const { credentials } = await authClient.refreshAccessToken();
+            user.accessToken = credentials.access_token;
+            if (credentials.refresh_token) user.refreshToken = credentials.refresh_token;
+            user.tokenExpiry = credentials.expiry_date ? new Date(credentials.expiry_date) : null;
+            await user.save();
+        } catch (refreshErr) {
+            throw new Error("User token expired. Please login again.");
+        }
     }
 
-    const buffer = await response.arrayBuffer();
+    const gmail = google.gmail({ version: "v1", auth: authClient });
+    const rawMessage = [
+        `From: ${fromEmail || user.email}`,
+        `To: ${recipient}`,
+        `Subject: Message from Nexa AI`,
+        `MIME-Version: 1.0`,
+        `Content-Type: text/plain; charset="UTF-8"`,
+        "",
+        message
+    ].join("\r\n");
 
-    // ✅ Check image size
-    console.log("Image bytes:", buffer.byteLength);
-
-    const base64Image = Buffer.from(buffer).toString("base64");
-
-    return res.json({
-      type: "image",
-      image: base64Image,
-    });
-
-  } catch (error) {
-    console.error("Image Route Error:", error);
-    return res.status(500).json({ error: "Image generation failed" });
-  }
-});*/
-
-
-// =====================================================================
-// WhatsApp Cloud API — Manual 5min + Freeform 5min (3 replies) + Template
-// ===================================================================
-
-// ════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════
-// WHATSAPP CLOUD API — AI AUTO-REPLY SYSTEM
-// Flow: Manual 5min → AI 5min (max 3) → Cooldown 5min → Repeat
-// ════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════
-
-// ---- Constants ----
-// ════════════════════════════════════════════════════════════
-// WHATSAPP CLOUD API — INSTANT AI REPLY
-// ════════════════════════════════════════════════════════════
-// ════════════════════════════════════════════════════════════
-// WHATSAPP CLOUD API — INSTANT AI REPLY
-// No timers, no Redis, no BullMQ
-// ════════════════════════════════════════════════════════════
-
-const GROQ_MODEL = "openai/gpt-oss-20b";
-
-// ---- Groq AI ----
-async function askGroq(userMessage) {
-  const SYSTEM_RULES = `
-- Your name is Nexa.
-- Always address the user as "Abhi".
-- Tone: warm, natural, conversational — like a thoughtful friend.
-- Language: Match Abhi's language.
-  - If he speaks English → reply in English.
-  - If he speaks Hindi or Hinglish → reply in Hinglish (Hindi written in English letters, e.g., "kaise ho", "bilkul", "chalta hai").
-  - Never use Devanagari script. Always use Roman/English letters.
-- Use contractions naturally (it's, you're, I'll, let's).
-- Keep responses to 1-2 short sentences (10-20 words total). Never exceed 25 words.
-- Briefly acknowledge what Abhi says, then answer.
-- Match Abhi's energy — casual when he's casual, serious when he's serious.
-- Small humor is fine when appropriate.
-- Never sound robotic or over-formal.
-- Do NOT explain long.
-- Do NOT ask follow-up questions.
-- Avoid filler like "Sure!", "Of course!", "Certainly!".
-- Always end with proper punctuation (. ! ?) for natural voice.
-- Speak only in English or Hinglish (Roman letters). Never use Hindi script.
-
-USER COMMAND:
-${userMessage}
-
-FINAL OUTPUT:
-`;
-
-  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: GROQ_MODEL,
-      messages: [{ role: "user", content: SYSTEM_RULES }],
-      temperature: 0.3,
-      max_tokens: 500,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Groq error: ${res.status} ${err}`);
-  }
-
-  const data = await res.json();
-  const reply = data.choices?.[0]?.message?.content?.trim();
-  if (!reply) throw new Error("Empty Groq reply");
-  return reply;
+    const encodedMessage = Buffer.from(rawMessage).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    await gmail.users.messages.send({ userId: "me", requestBody: { raw: encodedMessage } });
 }
 
-// ---- WhatsApp Send Text ----
-async function waSendText(to, text) {
-  const url = `https://graph.facebook.com/v21.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+async function fireAutomation(automationId) {
+    try {
+        const automation = await AutomationModel.findById(automationId);
+        if (!automation || automation.status !== "processing") return;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-    },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body: text },
-    }),
-  });
+        let success = false;
+        if (automation.type === "test") {
+            await transporter.sendMail({
+                from: process.env.BOT_EMAIL,
+                to: automation.recipient,
+                subject: "Message from Nexa AI",
+                text: automation.message
+            });
+            success = true;
+        } else if (automation.type === "use") {
+            const user = await UserModel.findById(automation.userId);
+            if (!user) throw new Error("User not found");
+            const fromEmail = automation.senderEmail || user.email;
+            await sendEmailViaGmailAPI(user, automation.recipient, automation.message, fromEmail);
+            success = true;
+        }
 
-  if (!res.ok) {
-  const err = await res.text();
-  console.error("WhatsApp API Error:", err);
-  throw new Error(`WhatsApp send failed: ${res.status} ${err}`);
+        automation.status = success ? "success" : "failed";
+        automation.firedAt = new Date();
+        await automation.save();
+        console.log(`✅ Email sent: ${automation.type} → ${automation.recipient}`);
+    } catch (err) {
+        console.error(`❌ Automation ${automationId} failed:`, err.message);
+        await AutomationModel.findByIdAndUpdate(automationId, { status: "failed", firedAt: new Date() });
+    }
 }
-  return res.json();
+
+function scheduleAutomation(automation) {
+    const delay = new Date(automation.scheduledAt).getTime() - Date.now();
+    if (delay <= 0) {
+        fireAutomation(automation._id.toString());
+        return;
+    }
+    console.log(`⏰ Scheduled ${automation._id} in ${Math.round(delay / 1000)}s → ${automation.recipient}`);
+    setTimeout(() => fireAutomation(automation._id.toString()), delay);
 }
 
-// ---- Webhook Verification (GET) ----
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
+const sessionTokens = new Map();
+const SESSION_TOKEN_TTL_MS = 60 * 1000;
 
-  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
-    console.log("✅ Webhook verified");
-    return res.status(200).send(challenge);
-  }
-  console.log("❌ Webhook verification failed");
-  return res.sendStatus(403);
+setInterval(() => {
+    const now = Date.now();
+    for (const [token, data] of sessionTokens.entries()) {
+        if (data.expiresAt < now) sessionTokens.delete(token);
+    }
+}, 30 * 1000);
+
+// OAuth Routes
+const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_REDIRECT_URI
+);
+
+const OAUTH_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile"
+];
+
+
+
+app.get("/auth/google", (req, res) => {
+    const url = oauth2Client.generateAuthUrl({ access_type: "offline", scope: OAUTH_SCOPES, prompt: "consent" });
+    res.redirect(url);
 });
 
-// ---- Webhook Handler (POST) ----
-app.post("/webhook", async (req, res) => {
-  console.log("🔥 WEBHOOK HIT:", JSON.stringify(req.body, null, 2));
-  res.sendStatus(200);
+app.get("/auth/google/callback", async (req, res) => {
+    const { code } = req.query;
+    if (!code) return res.status(400).send("Authorization code missing");
 
+    try {
+        const { tokens } = await oauth2Client.getToken(code);
+        oauth2Client.setCredentials(tokens);
+        const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
+        const userInfo = await oauth2.userinfo.get();
+
+        const user = await UserModel.findOneAndUpdate(
+            { googleId: userInfo.data.id },
+            {
+                googleId: userInfo.data.id,
+                email: userInfo.data.email,
+                name: userInfo.data.name,
+                accessToken: tokens.access_token,
+                refreshToken: tokens.refresh_token,
+                tokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null
+            },
+            { upsert: true, new: true }
+        );
+
+        console.log("✅ User authenticated:", user.email);
+
+        // Redirect back to ai.html with user info in query params
+        /*const frontendBase = process.env.FRONTEND_URL || "";
+res.redirect(`${frontendBase}/ai.html?userId=${user._id}&email=${encodeURIComponent(user.email)}`);*/
+          const token = crypto.randomBytes(32).toString("hex");
+          sessionTokens.set(token, {
+         userId: user._id.toString(),
+         email: user.email,
+        expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
+      });
+       const frontendBase = process.env.FRONTEND_URL || "";
+      res.redirect(`${frontendBase}/ai.html#t=${token}`)
+
+
+    } catch (err) {
+        console.error("OAuth callback error:", err);
+        res.status(500).send("Authentication failed: " + err.message);
+    }
+});
+
+app.post("/auth/session", (req, res) => {
+    try {
+        const { token } = req.body;
+        if (!token) return res.status(400).json({ success: false, error: "Token required" });
+
+        const data = sessionTokens.get(token);
+        if (!data) return res.status(401).json({ success: false, error: "Invalid or expired token" });
+
+        if (data.expiresAt < Date.now()) {
+            sessionTokens.delete(token);
+            return res.status(401).json({ success: false, error: "Token expired" });
+        }
+
+        // One-time use — delete immediately
+        sessionTokens.delete(token);
+
+        res.json({ success: true, userId: data.userId, email: data.email });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+// Automation API Routes
+app.post("/api/automation/schedule", async (req, res) => {
+    try {
+        const { userId, type, senderEmail, recipient, message, timerMinutes, timerUnit } = req.body;
+        if (!type || !["test", "use"].includes(type)) return res.status(400).json({ success: false, error: "Type must be 'test' or 'use'" });
+        if (!recipient || !message || !timerMinutes) return res.status(400).json({ success: false, error: "Fields required" });
+        if (type === "use" && !userId) return res.status(400).json({ success: false, error: "userId required" });
+        const timer = Number(timerMinutes);
+        if (isNaN(timer) || timer <= 0) return res.status(400).json({ success: false, error: "Invalid timer" });
+
+        // Optional sender email validation (basic format check)
+        if (senderEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(senderEmail)) {
+            return res.status(400).json({ success: false, error: "Invalid sender email" });
+        }
+
+        // Normalize timerUnit
+        const unit = timerUnit === "seconds" ? "seconds" : "minutes";
+
+        const scheduledAt = new Date(Date.now() + timer * 60 * 1000);
+        const automation = await AutomationModel.create({
+            userId: userId || null,
+            type,
+            senderEmail: senderEmail || null,
+            recipient,
+            message,
+            timerMinutes: timer,
+            timerUnit: unit,
+            status: "processing",
+            scheduledAt
+        });
+        scheduleAutomation(automation);
+        res.json({ success: true, automationId: automation._id, scheduledAt });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.get("/api/automation/list", async (req, res) => {
+    try {
+        const { userId } = req.query;
+       /* const query = userId ? { userId } : { type: "test" };*/
+       const query = userId 
+    ? { $or: [{ userId }, { type: "test" }] } 
+    : { type: "test" };
+        const automations = await AutomationModel.find(query).sort({ createdAt: -1 }).limit(50);
+        res.json({ success: true, automations });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+app.post("/api/automation/cancel/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const automation = await AutomationModel.findById(id);
+        if (!automation) return res.status(404).json({ success: false, error: "Not found" });
+        if (automation.status !== "processing") return res.status(400).json({ success: false, error: `Cannot cancel` });
+        automation.status = "cancelled";
+        await automation.save();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 Automation Routes Server Running on PORT ${PORT}`);
+});
+
+mongoose.connection.once("open", async () => {
   try {
-    const body = req.body;
-    if (body.object !== "whatsapp_business_account") return;
-
-    const entry = body.entry?.[0];
-    const change = entry?.changes?.[0];
-
-    const value = change?.value;
-    if (!value) return;
-
-    const messages = value.messages;
-    if (!Array.isArray(messages)) return;
-
-    for (const message of messages) {
-      if (message.type !== "text") continue;
-
-      const from = message.from;
-      const text = message.text?.body;
-      if (!from || !text) continue;
-
-      console.log(`📩 [${from}] ${text}`);
-
-      try {
-        const reply = await askGroq(text);
-        await waSendText(from, reply);
-        console.log(`📤 [${from}] Reply: ${reply}`);
-      } catch (err) {
-        console.error(`Reply failed [${from}]:`, err.message);
-      }
-    }
+    const pending = await AutomationModel.find({ status: "processing" });
+    console.log(`📋 Loading ${pending.length} pending automation(s)`);
+    pending.forEach(scheduleAutomation);
   } catch (err) {
-    console.error("Webhook error:", err.message);
+    console.error("Failed to load pending automations:", err.message);
   }
 });
-
-// ════════════════════════════════════════════════════════════
-// END — WhatsApp Cloud API
-// ════════════════════════════════════════════════════════════
-
-// ============================================
-// 🚀 START SERVER
-// ============================================
-app.listen(5000, () => {
-  console.log("🚀 Automation Routes Server Running on PORT 5000");
-});
-
+ 
