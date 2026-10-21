@@ -30,7 +30,7 @@ app.use(express.json());
 // ============================================
 // DATABASE CONNECTION
 // ============================================
-mongoose.connect(process.env.MONGO_URI || "mongodb://114.31.138.88/32/voiceHistory")
+mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/voiceHistory")
 .then(() => console.log("mongoDB Connected"))
 .catch(err => console.log(err));
 
