@@ -69,7 +69,7 @@ app.post("/speak", async (req, res) => {
 
     if (isImageRequest) {
       try {
-        const imageResponse = await fetch("http://localhost:5000/generate-image", {
+        const imageResponse = await fetch("https://nexa-ai-pgs3.onrender.com/generate-image", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: message }),
@@ -425,7 +425,8 @@ FINAL OUTPUT:
 
   if (!response.ok) return res.sendStatus(response.status);
   const data = await response.json();
-  res.json({ message: data.choices?.[0]?.message?.content?.trim() || "No response" });
+    const finalText = data.choices?.[0]?.message?.content?.trim() || "No response";
+   res.json({ message: finalText })
       GroqLog.create({
         userMessage: message,
         aiResponse: finalText,
