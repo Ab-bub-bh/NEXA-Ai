@@ -319,8 +319,8 @@ app.post("/vscode", (req, res) => {
 });
 
 app.get("/voice", (req, res) => { res.sendFile(path.join(__dirname, "voice.html")); });
-app.get("/ai", (req, res) => { res.sendFile(path.join(__dirname, "chat.html")); });
-app.get("/agent", (req, res) => { res.sendFile(path.join(__dirname, "ai.html")); });
+app.get("/ai", (req, res) => { res.sendFile(path.join(__dirname, "ai.html")); });
+app.get("/agent", (req, res) => { res.sendFile(path.join(__dirname, "agent.html")); });
 
 
 app.post("/chat", async (req, res) => {  
