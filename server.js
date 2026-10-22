@@ -444,7 +444,7 @@ app.post("/generate_image", async (req, res) => {
     const { prompt } = req.body;
     if (!prompt || typeof prompt !== "string") return res.status(400).json({ error: "Invalid prompt" });
     const encoded = encodeURIComponent(prompt);
-    const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux`;
+    const url = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=turbo`;
     const response = await fetch(url);
     if (!response.ok) return res.sendStatus(response.status);
     const contentType = response.headers.get("content-type") || "";
