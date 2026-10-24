@@ -323,6 +323,8 @@ app.get("/ai", (req, res) => { res.sendFile(path.join(__dirname, "ai.html")); })
 app.get("/agent", (req, res) => { res.sendFile(path.join(__dirname, "agent.html")); });
 
 
+//CHAT ROOT //
+
 app.post("/chat", async (req, res) => {  
   const { message } = req.body;  
   try { 
@@ -439,6 +441,89 @@ FINAL OUTPUT:
   }
 });
 
+
+/*app.post("/generate_image", async (req, res) => {
+  console.log("\n--- 🚀 NAYA IMAGE REQUEST AAYA ---");
+  
+  try {
+    const { prompt } = req.body;
+    console.log("📝 Prompt:", prompt);
+
+    if (!prompt || typeof prompt !== "string") {
+      console.log("❌ Error: Prompt nahi mila ya galat hai.");
+      return res.status(400).json({ error: "Invalid prompt" });
+    }
+
+    const payload = {
+      "prompt": prompt,
+      "width": 1024,
+      "height": 1024,
+      "seed": 0,
+      "steps": 50
+    };
+
+    console.log("⏳ NVIDIA ko request bhej rahe hain... (Wait karein)");
+
+    // 30 second ka timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); 
+
+    const response = await fetch("https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux-3-image-klein", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.NVIDIA_API_KEY ? process.env.NVIDIA_API_KEY.trim() : ""}`,
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+    console.log("📡 NVIDIA Response Status:", response.status);
+
+    // Response ko text me padhenge pehle
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      // 🔴 YAHAN EXACT ERROR PRINT HOGA
+      console.error("\n❌❌❌ NVIDIA API FAILED ❌❌❌");
+      console.error("Status Code:", response.status);
+      console.error("Error Message:", responseText);
+      console.error("=====================================\n");
+      
+      return res.status(response.status).json({ 
+        error: "NVIDIA API Error", 
+        details: responseText 
+      });
+    }
+
+    // Agar Status 200 OK hai
+    const data = JSON.parse(responseText);
+    const base64Image = data.artifacts?.[0]?.base64 || data.image;
+
+    if (!base64Image) {
+      console.error("\n❌ Image data response me nahi mila. Poora Data:");
+      console.error(JSON.stringify(data, null, 2));
+      return res.status(502).json({ error: "No image data received" });
+    }
+
+    console.log("✅ Image successfully ban gayi!");
+    return res.json({ type: "image", image: base64Image });
+
+  } catch (error) {
+    // 🔴 Agar Timeout ho gaya ya Network fail hua
+    console.error("\n❌❌❌ CATCH ERROR (Timeout ya Network) ❌❌❌");
+    console.error("Error Name:", error.name);
+    console.error("Error Message:", error.message);
+    console.error("==============================================\n");
+    
+    if (error.name === 'AbortError') {
+      return res.status(504).json({ error: "NVIDIA took too long to respond (Timeout 30s)" });
+    }
+    return res.status(500).json({ error: "Internal Server Error", details: error.message });
+  }
+});*/
 app.post("/generate_image", async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -455,6 +540,7 @@ app.post("/generate_image", async (req, res) => {
     return res.status(500).json({ message: "Image generation failed" });
   }
 });
+
 
 app.post("/generate-video", async (req, res) => {
   try {
@@ -724,7 +810,7 @@ res.redirect(`${frontendBase}/ai.html?userId=${user._id}&email=${encodeURICompon
         expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
       });
        const frontendBase = process.env.FRONTEND_URL || "";
-      res.redirect(`${frontendBase}/ai.html#t=${token}`)
+      res.redirect(`${frontendBase}/agent.html#t=${token}`)
 
 
     } catch (err) {
