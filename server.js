@@ -72,7 +72,14 @@ app.post("/speak", async (req, res) => {
   try { 
     const lower = message.toLowerCase().trim();
 
-    const isImageRequest = lower.includes("generate") && lower.includes("image");
+   const actionWords = /(gen|generate|create|make|draw|paint|render|show|give|design|sketch|illustrate|click|take|banao|bana|banaao|banaye|banado|kheencho|kheench|bnado)/i;
+    
+   const imageWords = /(image|pic|picture|photo|photograph|art|artwork|painting|wallpaper|sketch|drawing|illustration|poster|banner|tasveer|chitra|img)/i;
+
+     const hasAction = actionWords.test(lower);
+    const hasImageWord = imageWords.test(lower);
+
+    const isImageRequest = hasAction && hasImageWord;
 
     if (isImageRequest) {
       try {
@@ -337,7 +344,14 @@ app.post("/chat", async (req, res) => {
   try { 
     const lower = message.toLowerCase().trim();
 
-    const isImageRequest = lower.includes("generate") && lower.includes("image")|| lower.includes("create") && lower.includes("image") || lower.includes("gen") && lower.includes("image");
+   const actionWords = /(gen|generate|create|make|draw|paint|render|show|give|design|sketch|illustrate|click|take|banao|bana|banaao|banaye|banado|kheencho|kheench|bnado)/i;
+    
+   const imageWords = /(image|pic|picture|photo|photograph|art|artwork|painting|wallpaper|sketch|drawing|illustration|poster|banner|tasveer|chitra|img)/i;
+
+     const hasAction = actionWords.test(lower);
+    const hasImageWord = imageWords.test(lower);
+
+    const isImageRequest = hasAction && hasImageWord;
     if (isImageRequest) {
       try {
         const imageResponse = await fetch(`${API_BASE}/generate_image`, {
