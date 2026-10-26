@@ -22,10 +22,8 @@ app.use(cors());
 
 app.use(express.json());
 
-const API_BASE = (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
-      ? "http://localhost:5000"
-      : "https://nexa-ai-pgs3.onrender.com";
-
+const PORT = process.env.PORT || 5000;
+const API_BASE = process.env.PORT ? "https://nexa-ai-pgs3.onrender.com" : "http://localhost:5000";
 // ============================================
 // DATABASE CONNECTION
 // ============================================
@@ -1137,7 +1135,7 @@ app.post("/api/automation/cancel/:id", async (req, res) => {
 });
 
 
-const PORT = process.env.PORT || 5000;
+
 app.listen(PORT, () => {
   console.log(`🚀 Automation Routes Server Running on PORT ${PORT}`);
 });
