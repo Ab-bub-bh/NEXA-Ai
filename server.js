@@ -22,10 +22,9 @@ app.use(cors());
 
 app.use(express.json());
 
-/*app.use(cors({
-    origin: ["http://localhost:5500", "http://localhost:5000"],
-    credentials: true
-}));*/
+const API_BASE = (location.hostname === "localhost" || location.hostname === "127.0.0.1" || location.protocol === "file:")
+      ? "http://localhost:5000"
+      : "https://nexa-ai-pgs3.onrender.com";
 
 // ============================================
 // DATABASE CONNECTION
@@ -79,7 +78,7 @@ app.post("/speak", async (req, res) => {
 
     if (isImageRequest) {
       try {
-        const imageResponse = await fetch("https://nexa-ai-pgs3.onrender.com/generate-image", {
+        const imageResponse = await fetch(`${API_BASE}/generate-image`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: message }),
@@ -343,7 +342,7 @@ app.post("/chat", async (req, res) => {
     const isImageRequest = lower.includes("generate") && lower.includes("image")|| lower.includes("create") && lower.includes("image") || lower.includes("gen") && lower.includes("image");
     if (isImageRequest) {
       try {
-        const imageResponse = await fetch("http://localhost:5000/generate_image", {
+        const imageResponse = await fetch(`${API_BASE}/generate_image`, {
           method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: message }),
         });
         return res.json(await imageResponse.json());
