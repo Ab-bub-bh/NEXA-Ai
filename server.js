@@ -346,7 +346,7 @@ app.post("/chat", async (req, res) => {
 
    const actionWords = /(gen|generate|create|make|draw|paint|render|show|give|design|sketch|illustrate|click|take|banao|bana|banaao|banaye|banado|kheencho|kheench|bnado)/i;
     
-   const imageWords = /(image|pic|picture|photo|photograph|art|artwork|painting|wallpaper|sketch|drawing|illustration|poster|banner|tasveer|chitra|img)/i;
+   const imageWords = /(image|pic|picture|photo|photograph|painting|wallpaper|sketch|drawing|illustration|poster|banner|tasveer|chitra|img)/i;
 
      const hasAction = actionWords.test(lower);
     const hasImageWord = imageWords.test(lower);
@@ -366,7 +366,7 @@ app.post("/chat", async (req, res) => {
  
 if (isVideoRequest) {
   try{
-    const videoRes = await fetch("http://localhost:5000/generate-video", {
+    const videoRes = await fetch(`${API_BASE}/generate-video`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: message }),
     });
     return res.json(await videoRes.json());   
@@ -442,11 +442,16 @@ FINAL OUTPUT:
 `;
 
   const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-    method: "POST", headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "openai/gpt-oss-20b", messages: [{ role: "user", content: SYSTEM_RULES  }], reasoning_effort:"low", temperature: 0.3, max_tokens: 500 }),
+    method: "POST", headers: { "Authorization": `Bearer ${ GROQ_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "openai/gpt-oss-20b", messages : [{ role: "user", content: SYSTEM_RULES  }], reasoning_effort:"low", temperature: 0.3, max_tokens: 500 }),
+  
   });
 
-  if (!response.ok) return res.sendStatus(response.status);
+    
+  if (!response.ok) {
+ console.log('Response Status:', response.status);
+    return res.sendStatus(response.status);
+  }
   const data = await response.json();
     const finalText = data.choices?.[0]?.message?.content?.trim() || "No response";
    res.json({ message: finalText })
@@ -587,14 +592,14 @@ app.post("/generate_image", async (req, res) => {
       "seed": 0,
       "steps": 50
     };
-
-    const controller = new AbortController();
+      const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 30000); 
 
     // ==========================================
     // ATTEMPT 1: NVIDIA API
     // ==========================================
     const response = await fetch("https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux-3-image-klein", {
+      
       method: "POST",
       headers: {
         "Authorization": `Bearer ${process.env.NVIDIA_API_KEY ? process.env.NVIDIA_API_KEY.trim() : ""}`,
@@ -629,7 +634,8 @@ app.post("/generate_image", async (req, res) => {
     // SMART CHECK: Agar image data khaali hai
     if (!base64Image) {
       const apiError = data.detail || data.error || data.message || (data.artifacts && data.artifacts[0]?.finishReason);
-      
+            // Naya error extraction logic (Cosmos3 ke liye)
+    
       if (apiError) {
         const errorString = JSON.stringify(apiError).toLowerCase();
         
@@ -782,24 +788,65 @@ app.post("/generate_image", async (req, res) => {
     return res.status(500).json({ message: "Image generation failed" });
   }
 });*/
+// PATH: routes/video.js (ya jis file me route defined hai)
 
-
+/**
+ * POST /generate-video
+ * Generates a video using NVIDIA Cosmos3-Nano and returns it as base64 MP4.
+ */
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
-    if (!prompt || typeof prompt !== "string") return res.status(400).json({ error: "Invalid prompt" });
-    const encodedPrompt = encodeURIComponent(prompt);
-    const url = `https://gen.pollinations.ai/video/${encodedPrompt}?model=veo&duration=5&aspectRatio=16:9`;
-    const pollRes = await fetch(url, { headers: { "Authorization": `Bearer ${process.env.POLLINATIONS_API_KEY}` } });
-    if (!pollRes.ok) return res.status(pollRes.status).json({ error: await pollRes.text() });
-    const contentType = pollRes.headers.get("content-type") || "";
-    if (!contentType.startsWith("video/")) return res.status(502).json({ error: "Provider did not return a video" });
-    const buffer = await pollRes.arrayBuffer();
-    return res.json({ type: "video", video: Buffer.from(buffer).toString("base64") });
+
+    if (!prompt || typeof prompt !== "string") {
+      return res.status(400).json({ error: "Invalid prompt" });
+    }
+
+    const nvidiaRes = await fetch(
+      "https://ai.api.nvidia.com/v1/cosmos/nvidia/cosmos3-nano",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.NVIDIA_API_KEY}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          model_mode: "text2video",
+          prompt: prompt,
+          resolution: "480_16_9",
+          num_frames: 25,
+          num_inference_steps: 35,
+          fps: 24,
+          seed: 42,
+        }),
+      }
+    );
+
+    if (!nvidiaRes.ok) {
+      const errText = await nvidiaRes.text();
+      console.error(
+        "[generate-video] NVIDIA API failed:",
+        nvidiaRes.status,
+        errText
+      );
+      return res.status(nvidiaRes.status).json({ error: errText });
+    }
+
+    const data = await nvidiaRes.json();
+
+    if (!data.b64_video) {
+      console.error("[generate-video] No b64_video in response");
+      return res.status(502).json({ error: "Provider returned no video data" });
+    }
+
+    return res.json({ type: "video", video: data.b64_video });
   } catch (err) {
+    console.error("[generate-video] Unhandled error:", err.message, err.stack);
     return res.status(500).json({ error: "Video generation failed" });
   }
 });
+
 
 app.post("/youtube", async (req, res) => {
   try {
@@ -1013,6 +1060,8 @@ const OAUTH_SCOPES = [
 
 
 app.get("/auth/google", (req, res) => {
+
+   const target = req.query.target === "agent" ? "agent" : "ai";
     const url = oauth2Client.generateAuthUrl({ access_type: "offline", scope: OAUTH_SCOPES, prompt: "consent" });
     res.redirect(url);
 });
@@ -1052,7 +1101,8 @@ res.redirect(`${frontendBase}/ai.html?userId=${user._id}&email=${encodeURICompon
         expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
       });
        const frontendBase = process.env.FRONTEND_URL || "";
-      res.redirect(`${frontendBase}/agent.html#t=${token}`)
+      const target = state === "agent" ? "agent" : "ai";
+        res.redirect(`${frontendBase}/${target}.html#t=${token}`);
 
 
     } catch (err) {
