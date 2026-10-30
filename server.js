@@ -916,12 +916,12 @@ app.post("/vscode", (req, res) => {
   });
 });
 
-
 // ==============================================================
-// 🚀 EMAIL AUTOMATION WORKFLOW (Naya Code - Sabse Neeche)
+// EMAIL AUTOMATION WORKFLOW
 // ==============================================================
 
 // Schemas for Automation
+
 const userSchema = new mongoose.Schema({
     googleId: { type: String, required: true, unique: true },
     email: { type: String, required: true },
@@ -931,6 +931,7 @@ const userSchema = new mongoose.Schema({
     tokenExpiry: { type: Date },
     createdAt: { type: Date, default: Date.now }
 });
+
 const UserModel = mongoose.model("User", userSchema);
 
 const automationSchema = new mongoose.Schema({
@@ -940,15 +941,25 @@ const automationSchema = new mongoose.Schema({
     recipient: { type: String, required: true },
     message: { type: String, required: true },
     timerMinutes: { type: Number, required: true },
-    timerUnit: { type: String, enum: ["minutes", "seconds"], default: "minutes" },
-    status: { type: String, enum: ["processing", "success", "failed", "cancelled"], default: "processing" },
+    timerUnit: {
+        type: String,
+        enum: ["minutes", "seconds"],
+        default: "minutes"
+    },
+    status: {
+        type: String,
+        enum: ["processing", "success", "failed", "cancelled"],
+        default: "processing"
+    },
     scheduledAt: { type: Date, required: true },
     firedAt: { type: Date },
     createdAt: { type: Date, default: Date.now }
 });
+
 const AutomationModel = mongoose.model("Automation", automationSchema);
 
 // Mailers & Timers
+
 const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: {
@@ -963,21 +974,38 @@ async function sendEmailViaGmailAPI(user, recipient, message, fromEmail) {
         process.env.GOOGLE_CLIENT_SECRET,
         process.env.GOOGLE_REDIRECT_URI
     );
-    authClient.setCredentials({ access_token: user.accessToken, refresh_token: user.refreshToken });
+
+    authClient.setCredentials({
+        access_token: user.accessToken,
+        refresh_token: user.refreshToken
+    });
 
     if (user.tokenExpiry && new Date(user.tokenExpiry) < new Date()) {
         try {
             const { credentials } = await authClient.refreshAccessToken();
+
             user.accessToken = credentials.access_token;
-            if (credentials.refresh_token) user.refreshToken = credentials.refresh_token;
-            user.tokenExpiry = credentials.expiry_date ? new Date(credentials.expiry_date) : null;
+
+            if (credentials.refresh_token) {
+                user.refreshToken = credentials.refresh_token;
+            }
+
+            user.tokenExpiry = credentials.expiry_date
+                ? new Date(credentials.expiry_date)
+                : null;
+
             await user.save();
+
         } catch (refreshErr) {
             throw new Error("User token expired. Please login again.");
         }
     }
 
-    const gmail = google.gmail({ version: "v1", auth: authClient });
+    const gmail = google.gmail({
+        version: "v1",
+        auth: authClient
+    });
+
     const rawMessage = [
         `From: ${fromEmail || user.email}`,
         `To: ${recipient}`,
@@ -988,16 +1016,26 @@ async function sendEmailViaGmailAPI(user, recipient, message, fromEmail) {
         message
     ].join("\r\n");
 
-    const encodedMessage = Buffer.from(rawMessage).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    await gmail.users.messages.send({ userId: "me", requestBody: { raw: encodedMessage } });
+    const encodedMessage = Buffer.from(rawMessage)
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+    await gmail.users.messages.send({
+        userId: "me",
+        requestBody: { raw: encodedMessage }
+    });
 }
 
 async function fireAutomation(automationId) {
     try {
         const automation = await AutomationModel.findById(automationId);
+
         if (!automation || automation.status !== "processing") return;
 
         let success = false;
+
         if (automation.type === "test") {
             await transporter.sendMail({
                 from: process.env.BOT_EMAIL,
@@ -1005,46 +1043,88 @@ async function fireAutomation(automationId) {
                 subject: "Message from Nexa AI",
                 text: automation.message
             });
+
             success = true;
+
         } else if (automation.type === "use") {
             const user = await UserModel.findById(automation.userId);
+
             if (!user) throw new Error("User not found");
+
             const fromEmail = automation.senderEmail || user.email;
-            await sendEmailViaGmailAPI(user, automation.recipient, automation.message, fromEmail);
+
+            await sendEmailViaGmailAPI(
+                user,
+                automation.recipient,
+                automation.message,
+                fromEmail
+            );
+
             success = true;
         }
 
         automation.status = success ? "success" : "failed";
         automation.firedAt = new Date();
+
         await automation.save();
-        console.log(`✅ Email sent: ${automation.type} → ${automation.recipient}`);
+
+        console.log(
+            `Email sent: ${automation.type} → ${automation.recipient}`
+        );
+
     } catch (err) {
-        console.error(`❌ Automation ${automationId} failed:`, err.message);
-        await AutomationModel.findByIdAndUpdate(automationId, { status: "failed", firedAt: new Date() });
+        console.error(
+            `Automation ${automationId} failed:`,
+            err.message
+        );
+
+        await AutomationModel.findByIdAndUpdate(
+            automationId,
+            {
+                status: "failed",
+                firedAt: new Date()
+            }
+        );
     }
 }
 
 function scheduleAutomation(automation) {
-    const delay = new Date(automation.scheduledAt).getTime() - Date.now();
+    const delay =
+        new Date(automation.scheduledAt).getTime() - Date.now();
+
     if (delay <= 0) {
         fireAutomation(automation._id.toString());
         return;
     }
-    console.log(`⏰ Scheduled ${automation._id} in ${Math.round(delay / 1000)}s → ${automation.recipient}`);
-    setTimeout(() => fireAutomation(automation._id.toString()), delay);
+
+    console.log(
+        `Scheduled ${automation._id} in ${Math.round(delay / 1000)}s → ${automation.recipient}`
+    );
+
+    setTimeout(
+        () => fireAutomation(automation._id.toString()),
+        delay
+    );
 }
 
+// Session Token Management
+
 const sessionTokens = new Map();
+
 const SESSION_TOKEN_TTL_MS = 60 * 1000;
 
 setInterval(() => {
     const now = Date.now();
+
     for (const [token, data] of sessionTokens.entries()) {
-        if (data.expiresAt < now) sessionTokens.delete(token);
+        if (data.expiresAt < now) {
+            sessionTokens.delete(token);
+        }
     }
 }, 30 * 1000);
 
-// OAuth Routes
+// OAuth Configuration
+
 const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
@@ -1057,23 +1137,43 @@ const OAUTH_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.profile"
 ];
 
-
+// Agent Google Authentication
 
 app.get("/auth/google", (req, res) => {
+    console.log("/auth/google route hit");
 
-   const target = req.query.target === "agent" ? "agent" : "ai";
-    const url = oauth2Client.generateAuthUrl({ access_type: "offline", scope: OAUTH_SCOPES, prompt: "consent" });
-    res.redirect(url);
+    const url = oauth2Client.generateAuthUrl({
+        access_type: "offline",
+        scope: OAUTH_SCOPES,
+        prompt: "consent"
+    });
+
+    return res.redirect(url);
 });
 
 app.get("/auth/google/callback", async (req, res) => {
     const { code } = req.query;
-    if (!code) return res.status(400).send("Authorization code missing");
+
+    if (!code) {
+        return res.status(400).send("Authorization code missing");
+    }
 
     try {
-        const { tokens } = await oauth2Client.getToken(code);
-        oauth2Client.setCredentials(tokens);
-        const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
+        const agentClient = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID,
+            process.env.GOOGLE_CLIENT_SECRET,
+            process.env.GOOGLE_REDIRECT_URI
+        );
+
+        const { tokens } = await agentClient.getToken(code);
+
+        agentClient.setCredentials(tokens);
+
+        const oauth2 = google.oauth2({
+            version: "v2",
+            auth: agentClient
+        });
+
         const userInfo = await oauth2.userinfo.get();
 
         const user = await UserModel.findOneAndUpdate(
@@ -1084,74 +1184,157 @@ app.get("/auth/google/callback", async (req, res) => {
                 name: userInfo.data.name,
                 accessToken: tokens.access_token,
                 refreshToken: tokens.refresh_token,
-                tokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date) : null
+                tokenExpiry: tokens.expiry_date
+                    ? new Date(tokens.expiry_date)
+                    : null
             },
             { upsert: true, new: true }
         );
 
-        console.log("✅ User authenticated:", user.email);
+        console.log("User authenticated:", user.email);
 
-        // Redirect back to ai.html with user info in query params
-        /*const frontendBase = process.env.FRONTEND_URL || "";
-res.redirect(`${frontendBase}/ai.html?userId=${user._id}&email=${encodeURIComponent(user.email)}`);*/
-          const token = crypto.randomBytes(32).toString("hex");
-          sessionTokens.set(token, {
-         userId: user._id.toString(),
-         email: user.email,
-        expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
-      });
-       const frontendBase = process.env.FRONTEND_URL || "";
-      const target = state === "agent" ? "agent" : "ai";
-        res.redirect(`${frontendBase}/${target}.html#t=${token}`);
+        const token = crypto.randomBytes(32).toString("hex");
 
+        sessionTokens.set(token, {
+            userId: user._id.toString(),
+            email: user.email,
+            expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
+        });
+
+        const frontendBase =
+            process.env.FRONTEND_URL || "http://localhost:5500";
+
+        return res.redirect(
+            `${frontendBase}/agent.html#t=${token}`
+        );
 
     } catch (err) {
         console.error("OAuth callback error:", err);
-        res.status(500).send("Authentication failed: " + err.message);
+
+        if (res.headersSent) return;
+
+        return res.status(500).send(
+            "Authentication failed: " + err.message
+        );
     }
 });
 
+// Agent Session Verification
+
 app.post("/auth/session", (req, res) => {
+    console.log("AUTH SESSION ROUTE HIT");
+
     try {
         const { token } = req.body;
-        if (!token) return res.status(400).json({ success: false, error: "Token required" });
+
+        if (!token) {
+            return res.status(400).json({
+                success: false,
+                error: "Token required"
+            });
+        }
 
         const data = sessionTokens.get(token);
-        if (!data) return res.status(401).json({ success: false, error: "Invalid or expired token" });
+
+        if (!data) {
+            return res.status(401).json({
+                success: false,
+                error: "Invalid or expired token"
+            });
+        }
 
         if (data.expiresAt < Date.now()) {
             sessionTokens.delete(token);
-            return res.status(401).json({ success: false, error: "Token expired" });
+
+            return res.status(401).json({
+                success: false,
+                error: "Token expired"
+            });
         }
 
-        // One-time use — delete immediately
         sessionTokens.delete(token);
 
-        res.json({ success: true, userId: data.userId, email: data.email });
+        console.log("SESSION DATA:", {
+            userId: data.userId,
+            email: data.email
+        });
+
+        return res.json({
+            success: true,
+            userId: data.userId,
+            email: data.email
+        });
+
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        return res.status(500).json({
+            success: false,
+            error: err.message
+        });
     }
-  });
+});
 
 // Automation API Routes
+
 app.post("/api/automation/schedule", async (req, res) => {
     try {
-        const { userId, type, senderEmail, recipient, message, timerMinutes, timerUnit } = req.body;
-        if (!type || !["test", "use"].includes(type)) return res.status(400).json({ success: false, error: "Type must be 'test' or 'use'" });
-        if (!recipient || !message || !timerMinutes) return res.status(400).json({ success: false, error: "Fields required" });
-        if (type === "use" && !userId) return res.status(400).json({ success: false, error: "userId required" });
-        const timer = Number(timerMinutes);
-        if (isNaN(timer) || timer <= 0) return res.status(400).json({ success: false, error: "Invalid timer" });
+        const {
+            userId,
+            type,
+            senderEmail,
+            recipient,
+            message,
+            timerMinutes,
+            timerUnit
+        } = req.body;
 
-        // Optional sender email validation (basic format check)
-        if (senderEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(senderEmail)) {
-            return res.status(400).json({ success: false, error: "Invalid sender email" });
+        if (!type || !["test", "use"].includes(type)) {
+            return res.status(400).json({
+                success: false,
+                error: "Type must be 'test' or 'use'"
+            });
         }
 
-        // Normalize timerUnit
-        const unit = timerUnit === "seconds" ? "seconds" : "minutes";
+        if (!recipient || !message || !timerMinutes) {
+            return res.status(400).json({
+                success: false,
+                error: "Fields required"
+            });
+        }
 
-        const scheduledAt = new Date(Date.now() + timer * 60 * 1000);
+        if (type === "use" && !userId) {
+            return res.status(400).json({
+                success: false,
+                error: "userId required"
+            });
+        }
+
+        const timer = Number(timerMinutes);
+
+        if (isNaN(timer) || timer <= 0) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid timer"
+            });
+        }
+
+        if (
+            senderEmail &&
+            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(senderEmail)
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid sender email"
+            });
+        }
+
+        const unit = timerUnit === "seconds"
+            ? "seconds"
+            : "minutes";
+
+        const scheduledAt = new Date(
+            Date.now() + timer * 60 * 1000
+        );
+
         const automation = await AutomationModel.create({
             userId: userId || null,
             type,
@@ -1163,54 +1346,247 @@ app.post("/api/automation/schedule", async (req, res) => {
             status: "processing",
             scheduledAt
         });
+
         scheduleAutomation(automation);
-        res.json({ success: true, automationId: automation._id, scheduledAt });
+
+        return res.json({
+            success: true,
+            automationId: automation._id,
+            scheduledAt
+        });
+
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        return res.status(500).json({
+            success: false,
+            error: err.message
+        });
     }
 });
 
 app.get("/api/automation/list", async (req, res) => {
     try {
         const { userId } = req.query;
-       /* const query = userId ? { userId } : { type: "test" };*/
-       const query = userId 
-    ? { $or: [{ userId }, { type: "test" }] } 
-    : { type: "test" };
-        const automations = await AutomationModel.find(query).sort({ createdAt: -1 }).limit(50);
-        res.json({ success: true, automations });
+
+        const query = userId
+            ? { $or: [{ userId }, { type: "test" }] }
+            : { type: "test" };
+
+        const automations = await AutomationModel.find(query)
+            .sort({ createdAt: -1 })
+            .limit(50);
+
+        return res.json({
+            success: true,
+            automations
+        });
+
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        return res.status(500).json({
+            success: false,
+            error: err.message
+        });
     }
 });
 
 app.post("/api/automation/cancel/:id", async (req, res) => {
     try {
         const { id } = req.params;
+
         const automation = await AutomationModel.findById(id);
-        if (!automation) return res.status(404).json({ success: false, error: "Not found" });
-        if (automation.status !== "processing") return res.status(400).json({ success: false, error: `Cannot cancel` });
+
+        if (!automation) {
+            return res.status(404).json({
+                success: false,
+                error: "Not found"
+            });
+        }
+
+        if (automation.status !== "processing") {
+            return res.status(400).json({
+                success: false,
+                error: "Cannot cancel"
+            });
+        }
+
         automation.status = "cancelled";
+
         await automation.save();
-        res.json({ success: true });
+
+        return res.json({
+            success: true
+        });
+
     } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        return res.status(500).json({
+            success: false,
+            error: err.message
+        });
     }
 });
 
+// Website Login Routes
 
+app.get("/auth/google/signin", (req, res) => {
+    const signinClient = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID_2,
+        process.env.GOOGLE_CLIENT_SECRET_2,
+        process.env.GOOGLE_SIGNIN_REDIRECT_URI
+    );
 
-app.listen(PORT, () => {
-  console.log(`🚀 Automation Routes Server Running on PORT ${PORT}`);
+    const url = signinClient.generateAuthUrl({
+        access_type: "offline",
+        scope: OAUTH_SCOPES
+    });
+
+    return res.redirect(url);
 });
+
+app.get("/auth/googlein/callback", async (req, res) => {
+    const { code } = req.query;
+
+    if (!code) {
+        return res.status(400).send("Authorization code missing");
+    }
+
+    try {
+        const signinClient = new google.auth.OAuth2(
+            process.env.GOOGLE_CLIENT_ID_2,
+            process.env.GOOGLE_CLIENT_SECRET_2,
+            process.env.GOOGLE_SIGNIN_REDIRECT_URI
+        );
+
+        const { tokens } = await signinClient.getToken(code);
+
+        signinClient.setCredentials(tokens);
+
+        const oauth2 = google.oauth2({
+            version: "v2",
+            auth: signinClient
+        });
+
+        const userInfo = await oauth2.userinfo.get();
+
+        const user = await UserModel.findOneAndUpdate(
+            { googleId: userInfo.data.id },
+            {
+                googleId: userInfo.data.id,
+                email: userInfo.data.email,
+                name: userInfo.data.name,
+                accessToken: tokens.access_token,
+                refreshToken: tokens.refresh_token,
+                tokenExpiry: tokens.expiry_date
+                    ? new Date(tokens.expiry_date)
+                    : null
+            },
+            { upsert: true, new: true }
+        );
+
+        console.log(
+            "User authenticated via Website Login:",
+            user.email
+        );
+
+        const token = crypto.randomBytes(32).toString("hex");
+
+        sessionTokens.set(token, {
+            userId: user._id.toString(),
+            email: user.email,
+            expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
+        });
+
+        const frontendBase =
+            process.env.FRONTEND_URL || "http://localhost:5500";
+
+        const redirectURL =
+            `${frontendBase}/signup.html#t=${token}`;
+
+        console.log("TOKEN CREATED:", !!token);
+        console.log("SESSION MAP SIZE:", sessionTokens.size);
+        console.log("FRONTEND BASE:", frontendBase);
+
+        return res.redirect(302, redirectURL);
+
+    } catch (err) {
+        console.error("Website OAuth callback error:", err);
+
+        if (res.headersSent) {
+            return;
+        }
+
+        return res.status(500).send("Authentication failed");
+    }
+});
+
+// Website Login Session Verification
+
+app.post("/auth/signin-session", (req, res) => {
+    console.log("SIGNIN SESSION ROUTE HIT");
+
+    try {
+        const { token } = req.body;
+
+        if (!token) {
+            return res.status(400).json({
+                success: false,
+                message: "Token missing"
+            });
+        }
+
+        const data = sessionTokens.get(token);
+
+        if (!data || data.expiresAt < Date.now()) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid or expired token"
+            });
+        }
+
+        sessionTokens.delete(token);
+
+        console.log("USER AUTHENTICATED:", data.email);
+
+        return res.json({
+            success: true,
+            userId: data.userId,
+            email: data.email
+        });
+
+    } catch (error) {
+        console.error("SESSION ERROR:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+});
+
+// Load Pending Automations When MongoDB Connects
 
 mongoose.connection.once("open", async () => {
-  try {
-    const pending = await AutomationModel.find({ status: "processing" });
-    console.log(`📋 Loading ${pending.length} pending automation(s)`);
-    pending.forEach(scheduleAutomation);
-  } catch (err) {
-    console.error("Failed to load pending automations:", err.message);
-  }
+    try {
+        const pending = await AutomationModel.find({
+            status: "processing"
+        });
+
+        console.log(
+            `Loading ${pending.length} pending automation(s)`
+        );
+
+        pending.forEach(scheduleAutomation);
+
+    } catch (err) {
+        console.error(
+            "Failed to load pending automations:",
+            err.message
+        );
+    }
 });
- 
+
+// Start Server
+
+app.listen(PORT, () => {
+    console.log(
+        `Automation Routes Server Running on PORT ${PORT}`
+    );
+});
