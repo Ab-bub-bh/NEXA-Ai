@@ -572,6 +572,9 @@ app.get("/ai", (req, res) => { res.sendFile(path.join(__dirname, "ai.html")); })
 
 app.get("/agent", (req, res) => { res.sendFile(path.join(__dirname, "agent.html")); });
 
+app.get("/signup", (req, res) => { res.sendFile(path.join(__dirname, "signup.html")); });
+
+
 // CHAT ROOT
 
 app.post("/chat", async (req, res) => {  
