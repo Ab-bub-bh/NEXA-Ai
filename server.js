@@ -24,6 +24,10 @@ import nodemailer from "nodemailer";
 
 import crypto from "crypto";
 
+import bcrypt from "bcryptjs";
+
+
+
 const __filename = fileURLToPath(import.meta.url);
 
 const __dirname = path.dirname(__filename);
@@ -1551,17 +1555,31 @@ app.post("/vscode", (req, res) => {
 
 // Schemas for Automation
 
+
+
 const userSchema = new mongoose.Schema({
-    googleId: { type: String, required: true, unique: true },
-    email: { type: String, required: true },
+    // ── Google OAuth (unchanged fields, loosened validation) ──
+    googleId: { type: String, sparse: true, unique: true },
+    email: { type: String, lowercase: true, trim: true },
     name: { type: String },
     accessToken: { type: String },
     refreshToken: { type: String },
     tokenExpiry: { type: Date },
-    createdAt: { type: Date, default: Date.now }
+    createdAt: { type: Date, default: Date.now },
+
+    // ── NEW: mobile + password auth ──
+    mobile: { type: String, sparse: true, unique: true, trim: true },
+    password: { type: String },
+    passwordResetToken: { type: String },
+    passwordResetExpires: { type: Date }
 });
 
+// Login by email ke liye index (findOne({ email }) fast)
+userSchema.index({ email: 1 });
+
 const UserModel = mongoose.model("User", userSchema);
+export default UserModel;   
+
 
 const automationSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -2053,142 +2071,218 @@ app.post("/api/automation/cancel/:id", async (req, res) => {
     }
 });
 
-// Website Login Routes
 
-app.get("/auth/google/signin", (req, res) => {
-    const signinClient = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID_2,
-        process.env.GOOGLE_CLIENT_SECRET_2,
-        process.env.GOOGLE_SIGNIN_REDIRECT_URI
-    );
+// ─────────────────────────────────────────
+// EMAIL SENDER (inline — no separate file)
+// ─────────────────────────────────────────
 
-    const url = signinClient.generateAuthUrl({
-        access_type: "offline",
-        scope: OAUTH_SCOPES
+const mailClient = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT) || 587,
+  secure: false,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
+  }
+});
+
+console.log("Checking connection to:", process.env.SMTP_HOST);
+
+mailClient.verify((error, success) => {
+  if (error) {
+    console.error("❌ FAILED:", error.message);
+  } else {
+    console.log("✅ SUCCESS: Gmail is connected and ready to send emails!");
+  }
+});
+async function sendPasswordResetEmail({ to, resetUrl, userName }) {
+  const displayName = userName || "there";
+
+  return mailClient.sendMail({
+    from: `"Nexa AI" <${process.env.SMTP_USER}>`,
+    to,
+    subject: "Reset your Nexa AI password",
+    text: `Hi ${displayName},\n\nReset your password (valid 1 hour):\n\n${resetUrl}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#050B14;color:#F0F6FC;border-radius:12px">
+        <h2 style="margin:0 0 12px">Reset your password</h2>
+        <p style="color:#8896AA">Link valid for 1 hour.</p>
+        <p>
+          <a href="${resetUrl}" style="display:inline-block;padding:13px 28px;background:#00D4FF;color:#001018;border-radius:8px;text-decoration:none;font-weight:600">Reset password</a>
+        </p>
+      </div>
+    `
+  });
+}
+
+// Website Login
+
+// ─────────────────────────────────────────
+// NEW AUTH ROUTES (inline — no separate file)
+// ─────────────────────────────────────────
+
+// POST /auth/signup
+app.post("/auth/signup", async (req, res) => {
+  try {
+    const { mobile, email, password, name } = req.body || {};
+
+    if (!mobile || !password) {
+      return res.status(400).json({ success: false, message: "Mobile and password are required." });
+    }
+
+    const mobileStr = String(mobile).trim();
+    const passwordStr = String(password);
+
+    if (mobileStr.length < 6 || mobileStr.length > 20) {
+      return res.status(400).json({ success: false, message: "Invalid mobile number." });
+    }
+    if (passwordStr.length < 6) {
+      return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+    }
+
+    const existing = await UserModel.findOne({ mobile: mobileStr });
+    if (existing) {
+      return res.status(409).json({ success: false, message: "This mobile number is already registered." });
+    }
+
+    const hash = await bcrypt.hash(passwordStr, 10);
+
+    const user = await UserModel.create({
+      mobile: mobileStr,
+      email: email ? String(email).trim().toLowerCase() : undefined,
+      name: name ? String(name).trim() : undefined,
+      password: hash
     });
 
-    return res.redirect(url);
+    return res.json({
+      success: true,
+      userId: user._id.toString(),
+      mobile: user.mobile,
+      email: user.email || null
+    });
+  } catch (err) {
+    console.error("Signup error:", err);
+    if (err.code === 11000) {
+      return res.status(409).json({ success: false, message: "Account already exists." });
+    }
+    return res.status(500).json({ success: false, message: "Signup failed. Please try again." });
+  }
 });
 
-app.get("/auth/googlein/callback", async (req, res) => {
-    const { code } = req.query;
+// POST /auth/login
+app.post("/auth/login", async (req, res) => {
+  try {
+    const { identifier, password } = req.body || {};
 
-    if (!code) {
-        return res.status(400).send("Authorization code missing");
+    if (!identifier || !password) {
+      return res.status(400).json({ success: false, message: "Email/mobile and password are required." });
     }
+
+    const idStr = String(identifier).trim();
+
+    const user = await UserModel.findOne({
+      $or: [{ mobile: idStr }, { email: idStr.toLowerCase() }]
+    });
+
+    if (!user || !user.password) {
+      return res.status(401).json({ success: false, message: "Invalid credentials." });
+    }
+
+    const ok = await bcrypt.compare(String(password), user.password);
+    if (!ok) {
+      return res.status(401).json({ success: false, message: "Invalid credentials." });
+    }
+
+    return res.json({
+      success: true,
+      userId: user._id.toString(),
+      email: user.email || null,
+      mobile: user.mobile || null
+    });
+  } catch (err) {
+    console.error("Login error:", err);
+    return res.status(500).json({ success: false, message: "Login failed. Please try again." });
+  }
+});
+
+// POST /auth/forgot-password
+app.post("/auth/forgot-password", async (req, res) => {  
+    console.log("forget password hit");
+
+  const genericResponse = {
+    success: true,
+    message: "If an account exists with this email, a reset link has been sent."
+  };
+
+  try {
+    const { email } = req.body || {};
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email is required." });
+    }
+
+    const emailStr = String(email).trim().toLowerCase();
+    const user = await UserModel.findOne({ email: emailStr });
+
+    if (!user) return res.json(genericResponse);
+
+    const token = crypto.randomBytes(32).toString("hex");
+    user.passwordResetToken = token;
+    user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000);
+    await user.save();
+
+    const frontendBase = process.env.FRONTEND_URL || "http://localhost:5000";
+    const resetUrl = `${frontendBase}/signup.html?token=${token}`;
+
 
     try {
-        const signinClient = new google.auth.OAuth2(
-            process.env.GOOGLE_CLIENT_ID_2,
-            process.env.GOOGLE_CLIENT_SECRET_2,
-            process.env.GOOGLE_SIGNIN_REDIRECT_URI
-        );
-
-        const { tokens } = await signinClient.getToken(code);
-
-        signinClient.setCredentials(tokens);
-
-        const oauth2 = google.oauth2({
-            version: "v2",
-            auth: signinClient
-        });
-
-        const userInfo = await oauth2.userinfo.get();
-
-        const user = await UserModel.findOneAndUpdate(
-            { googleId: userInfo.data.id },
-            {
-                googleId: userInfo.data.id,
-                email: userInfo.data.email,
-                name: userInfo.data.name,
-                accessToken: tokens.access_token,
-                refreshToken: tokens.refresh_token,
-                tokenExpiry: tokens.expiry_date
-                    ? new Date(tokens.expiry_date)
-                    : null
-            },
-            { upsert: true, new: true }
-        );
-
-        console.log(
-            "User authenticated via Website Login:",
-            user.email
-        );
-
-        const token = crypto.randomBytes(32).toString("hex");
-
-        sessionTokens.set(token, {
-            userId: user._id.toString(),
-            email: user.email,
-            expiresAt: Date.now() + SESSION_TOKEN_TTL_MS
-        });
-
-        const frontendBase =
-            process.env.FRONTEND_URL || "http://localhost:5500";
-
-        const redirectURL =
-            `${frontendBase}/signup.html#t=${token}`;
-
-        console.log("TOKEN CREATED:", !!token);
-        console.log("SESSION MAP SIZE:", sessionTokens.size);
-        console.log("FRONTEND BASE:", frontendBase);
-
-        return res.redirect(302, redirectURL);
-
-    } catch (err) {
-        console.error("Website OAuth callback error:", err);
-
-        if (res.headersSent) {
-            return;
-        }
-
-        return res.status(500).send("Authentication failed");
+      await sendPasswordResetEmail({ to: user.email, resetUrl, userName: user.name });
+    } catch (mailErr) {
+      console.error("Mail send failed:", mailErr.message);
     }
+
+    return res.json(genericResponse);
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    return res.json(genericResponse);
+  }
 });
 
-// Website Login Session Verification
+// POST /auth/reset-password
+app.post("/auth/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body || {};
 
-app.post("/auth/signin-session", (req, res) => {
-    console.log("SIGNIN SESSION ROUTE HIT");
-
-    try {
-        const { token } = req.body;
-
-        if (!token) {
-            return res.status(400).json({
-                success: false,
-                message: "Token missing"
-            });
-        }
-
-        const data = sessionTokens.get(token);
-
-        if (!data || data.expiresAt < Date.now()) {
-            return res.status(401).json({
-                success: false,
-                message: "Invalid or expired token"
-            });
-        }
-
-        sessionTokens.delete(token);
-
-        console.log("USER AUTHENTICATED:", data.email);
-
-        return res.json({
-            success: true,
-            userId: data.userId,
-            email: data.email
-        });
-
-    } catch (error) {
-        console.error("SESSION ERROR:", error);
-
-        return res.status(500).json({
-            success: false,
-            message: error.message
-        });
+    if (!token || !newPassword) {
+      return res.status(400).json({ success: false, message: "Token and new password are required." });
     }
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+    }
+
+    const user = await UserModel.findOne({
+      passwordResetToken: String(token),
+      passwordResetExpires: { $gt: new Date() }
+    });
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: "Invalid or expired reset link." });
+    }
+
+    user.password = await bcrypt.hash(String(newPassword), 10);
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+
+    return res.json({ success: true, message: "Password updated. You can sign in now." });
+  } catch (err) {
+    console.error("Reset password error:", err);
+    return res.status(500).json({ success: false, message: "Reset failed. Please try again." });
+  }
 });
+
+
+
+
 
 // Load Pending Automations When MongoDB Connects
 
