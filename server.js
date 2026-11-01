@@ -2230,8 +2230,8 @@ app.post("/auth/forgot-password", async (req, res) => {
     user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000);
     await user.save();
 
-    const frontendBase = process.env.FRONTEND_URL || "http://localhost:5000";
-    const resetUrl = `${frontendBase}/signup.html?token=${token}`;
+    const frontendBase1 = process.env.FRONTEND_URL_ || "http://localhost:5000";
+    const resetUrl = `${frontendBase1}/signup.html?token=${token}`;
 
 
     try {
