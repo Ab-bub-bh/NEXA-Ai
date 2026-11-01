@@ -2076,30 +2076,12 @@ app.post("/api/automation/cancel/:id", async (req, res) => {
 // EMAIL SENDER (inline — no separate file)
 // ─────────────────────────────────────────
 
-const mailClient = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
-});
 
-console.log("Checking connection to:", process.env.SMTP_HOST);
-
-mailClient.verify((error, success) => {
-  if (error) {
-    console.error("❌ FAILED:", error.message);
-  } else {
-    console.log("✅ SUCCESS: Gmail is connected and ready to send emails!");
-  }
-});
 async function sendPasswordResetEmail({ to, resetUrl, userName }) {
   const displayName = userName || "there";
 
-  return mailClient.sendMail({
-    from: `"Nexa AI" <${process.env.SMTP_USER}>`,
+  return transporter.sendMail({ // <-- Yahan transporter use kiya hai (jo tumhara agent use kar raha hai)
+    from: `"Nexa AI" <${process.env.BOT_EMAIL}>`, // <-- BOT_EMAIL use kiya hai
     to,
     subject: "Reset your Nexa AI password",
     text: `Hi ${displayName},\n\nReset your password (valid 1 hour):\n\n${resetUrl}`,
