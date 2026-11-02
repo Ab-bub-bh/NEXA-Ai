@@ -20,8 +20,6 @@ import { fileURLToPath } from "url";
 
 import { google } from "googleapis";
 
-import nodemailer from "nodemailer";
-
 import crypto from "crypto";
 
 import bcrypt from "bcryptjs";
@@ -1553,9 +1551,7 @@ app.post("/vscode", (req, res) => {
 // EMAIL AUTOMATION WORKFLOW
 // ==============================================================
 
-// Schemas for Automation
-
-
+// Schemas for Automati
 
 const userSchema = new mongoose.Schema({
     // ── Google OAuth (unchanged fields, loosened validation) ──
@@ -1607,13 +1603,6 @@ const AutomationModel = mongoose.model("Automation", automationSchema);
 
 // Mailers & Timers
 
-const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-        user: process.env.BOT_EMAIL,
-        pass: process.env.BOT_EMAIL_PASS
-    }
-});
 
 async function sendEmailViaGmailAPI(user, recipient, message, fromEmail) {
     const authClient = new google.auth.OAuth2(
@@ -1684,13 +1673,21 @@ async function fireAutomation(automationId) {
         let success = false;
 
         if (automation.type === "test") {
-            await transporter.sendMail({
-                from: process.env.BOT_EMAIL,
-                to: automation.recipient,
-                subject: "Message from Nexa AI",
-                text: automation.message
+            // ✅ FIX: Replaced SMTP with Resend API (Render pe chalega)
+            const res = await fetch("https://api.resend.com/emails", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    from: "Nexa AI <onboarding@resend.dev>",
+                    to: [automation.recipient],
+                    subject: "Message from Nexa AI",
+                    text: automation.message
+                })
             });
-
+            if (!res.ok) throw new Error("Resend API failed");
             success = true;
 
         } else if (automation.type === "use") {
@@ -2079,22 +2076,32 @@ app.post("/api/automation/cancel/:id", async (req, res) => {
 
 async function sendPasswordResetEmail({ to, resetUrl, userName }) {
   const displayName = userName || "there";
-
-  return transporter.sendMail({ // <-- Yahan transporter use kiya hai (jo tumhara agent use kar raha hai)
-    from: `"Nexa AI" <${process.env.BOT_EMAIL}>`, // <-- BOT_EMAIL use kiya hai
-    to,
-    subject: "Reset your Nexa AI password",
-    text: `Hi ${displayName},\n\nReset your password (valid 1 hour):\n\n${resetUrl}`,
-    html: `
-      <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#050B14;color:#F0F6FC;border-radius:12px">
-        <h2 style="margin:0 0 12px">Reset your password</h2>
-        <p style="color:#8896AA">Link valid for 1 hour.</p>
-        <p>
-          <a href="${resetUrl}" style="display:inline-block;padding:13px 28px;background:#00D4FF;color:#001018;border-radius:8px;text-decoration:none;font-weight:600">Reset password</a>
-        </p>
-      </div>
-    `
-  });
+  
+  // ✅ FIX: Replaced SMTP with Resend API
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        from: "Nexa AI <onboarding@resend.dev>",
+        to: [to],
+        subject: "Reset your Nexa AI password",
+        html: `
+          <div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:32px 24px;background:#050B14;color:#F0F6FC;border-radius:12px">
+            <h2 style="margin:0 0 12px">Reset your password</h2>
+            <p style="color:#8896AA">Hi ${displayName}, click the button below. Link valid for 1 hour.</p>
+            <p><a href="${resetUrl}" style="display:inline-block;padding:13px 28px;background:#00D4FF;color:#001018;border-radius:8px;text-decoration:none;font-weight:600">Reset password</a></p>
+          </div>
+        `
+      })
+    });
+    if (!res.ok) console.error("Resend Error:", await res.text());
+  } catch (err) {
+    console.error("Resend Fetch Error:", err.message);
+  }
 }
 
 // Website Login
@@ -2261,7 +2268,6 @@ app.post("/auth/reset-password", async (req, res) => {
     return res.status(500).json({ success: false, message: "Reset failed. Please try again." });
   }
 });
-
 
 
 
