@@ -2167,10 +2167,20 @@ app.post("/auth/login", async (req, res) => {
       return res.status(400).json({ success: false, message: "Email/mobile and password are required." });
     }
 
-    const idStr = String(identifier).trim();
+    let idStr = String(identifier).trim();
+    
+    // ✅ Mobile Number Format Fix
+    let mobileLookup = idStr.replace(/\D/g, ""); 
+    if (mobileLookup.length === 12 && mobileLookup.startsWith("91")) {
+      mobileLookup = mobileLookup.slice(2); 
+    }
 
     const user = await UserModel.findOne({
-      $or: [{ mobile: idStr }, { email: idStr.toLowerCase() }]
+      $or: [
+        { mobile: idStr },          // Direct match
+        { mobile: mobileLookup },   // 10 digits match
+        { email: idStr.toLowerCase() }
+      ]
     });
 
     if (!user || !user.password) {
@@ -2193,7 +2203,6 @@ app.post("/auth/login", async (req, res) => {
     return res.status(500).json({ success: false, message: "Login failed. Please try again." });
   }
 });
-
 // POST /auth/forgot-password
 app.post("/auth/forgot-password", async (req, res) => {  
     console.log("forget password hit");
