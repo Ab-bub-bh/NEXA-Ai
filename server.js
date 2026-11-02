@@ -48,11 +48,15 @@ const API_BASE = process.env.PORT ? "https://nexa-ai-pgs3.onrender.com" : "http:
 
 // ============================================
 
-mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/voiceHistory")
+const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
 
-.then(() => console.log("mongoDB Connected"))
-
-.catch(err => console.log(err));
+mongoose.connect(MONGO_URI, {
+  dbName: "NEXA_AI_DATA"
+})
+.then(() => {
+  console.log("MongoDB Connected:", mongoose.connection.name);
+})
+.catch(err => console.log("MongoDB Error:", err));
 
 // Voice command history — existing and unchanged
 
