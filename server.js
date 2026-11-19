@@ -583,137 +583,115 @@ app.get("/signup", (req, res) => { res.sendFile(path.join(__dirname, "signup.htm
 
 // CHAT ROOT
 
-app.post("/chat", async (req, res) => {  
 
-  const { message } = req.body;  
+app.post("/chat", async (req, res) => {
 
-  try { 
+  const { message } = req.body;
 
-    const lower = message.toLowerCase().trim();
+  try {
 
-   const actionWords = /(gen|generate|create|make|draw|paint|render|show|give|design|sketch|illustrate|click|take|banao|bana|banaao|banaye|banado|kheencho|kheench|bnado)/i;
+    const lower = message.toLowerCase().trim();
 
-   const imageWords = /(image|pic|picture|photo|photograph|painting|wallpaper|sketch|drawing|illustration|poster|banner|tasveer|chitra|img)/i;
+    const actionWords = /(gen|generate|create|make|draw|paint|render|show|give|design|sketch|illustrate|click|take|banao|bana|banaao|banaye|banado|kheencho|kheench|bnado)/i;
 
-     const hasAction = actionWords.test(lower);
+    const imageWords = /(image|pic|picture|photo|photograph|painting|wallpaper|sketch|drawing|illustration|poster|banner|tasveer|chitra|img)/i;
 
-    const hasImageWord = imageWords.test(lower);
+    const hasAction = actionWords.test(lower);
+    const hasImageWord = imageWords.test(lower);
 
-    const isImageRequest = hasAction && hasImageWord;
+    const isImageRequest = hasAction && hasImageWord;
 
-    if (isImageRequest) {
+    if (isImageRequest) {
 
-      try {
+      try {
 
-        const imageResponse = await fetch(`${API_BASE}/generate_image`, {
+        const imageResponse = await fetch(`${API_BASE}/generate_image`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: message }),
+        });
 
-          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: message }),
+        return res.json(await imageResponse.json());
 
-        });
+      } catch (error) {
+        return res.status(500).json({ error: "Image route failed" });
+      }
 
-        return res.json(await imageResponse.json());
+    }
 
-      } catch (error) { return res.status(500).json({ error: "Image route failed" }); }
+    const small = message.toLowerCase().trim();
 
-    }
+    const isVideoRequest =
+      small.includes("generate") && small.includes("video") ||
+      small.includes("create") && small.includes("video");
 
- const small = message.toLowerCase().trim();
+    if (isVideoRequest) {
 
- const isVideoRequest = small.includes("generate") && small.includes("video") || small.includes("create") && small.includes("video");
+      try {
 
-if (isVideoRequest) {
+        const videoRes = await fetch(`${API_BASE}/generate-video`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: message }),
+        });
 
-  try{
+        return res.json(await videoRes.json());
 
-    const videoRes = await fetch(`${API_BASE}/generate-video`, {
+      } catch (error) {
+        return res.status(500).json({ error: "Video route failed" });
+      }
 
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: message }),
+    }
 
-    });
+    const isYoutube = lower.includes("open youtube");
+    const isWhatsapp = lower.includes("open whatsapp");
+    const isChrome = lower.includes("open chrome");
+    const isVSCode = lower.includes("open visual studio code");
 
-    return res.json(await videoRes.json());   
+    const isAutomation = isYoutube || isWhatsapp || isChrome || isVSCode;
 
-  } catch (error) { return res.status(500).json({ error: "Video route failed" }); }
+    if (isAutomation) {
 
-}
+      const speakText = "okay sir";
 
-    const isCricket = lower.startsWith("score") || lower.includes("cricket") || lower.includes("match");
+      res.json({ message: speakText });
 
-if (isCricket) {
+      setTimeout(() => {
 
-  try {
+        if (isYoutube) fetch("http://localhost:5000/youtube", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: message })
+        });
 
-    const cricketResponse = await fetch("https://api.cricapi.com/v1/currentMatches?apikey=bd447f5a-529b-477e-87c9-4047e08687b9&offset=0");
+        if (isWhatsapp) fetch("http://localhost:5000/whatsapp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: message })
+        });
 
-    const cricketData = await cricketResponse.json();
+        if (isChrome) fetch("http://localhost:5000/chrome", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: message })
+        });
 
-    const match = cricketData.data.find(m => message.toLowerCase().includes(m.teams[0].toLowerCase()) || message.toLowerCase().includes(m.teams[1].toLowerCase()));
+        if (isVSCode) fetch("http://localhost:5000/vscode", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command: message })
+        });
 
-    const score = match?.score?.[0];
+      }, 800);
 
-    let modifiedPrompt = `Match: ${match?.name}\nScore: ${score?.r}/${score?.w} in ${score?.o} overs\nStatus: ${match?.status}\nUser asked: ${message}\nReply in one short line with\n`;
+      return;
 
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    }
 
-      method: "POST", headers: { "Authorization": `Bearer ${GROQ_API_KEY}`, "Content-Type": "application/json" },
-
-      body: JSON.stringify({ model: "llama-3.1-8b-instant", messages: [{ role: "user", content: modifiedPrompt }] }),
-
-    });
-
-    const data = await response.json();
-
-    const finalText = data.output_text || data.choices?.[0]?.message?.content || "No response";
-
-    const voiceResponse = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`, {
-
-        method: "POST", headers: { "xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json" },
-
-        body: JSON.stringify({ text: finalText, voice_settings: { stability: 0.5, similarity_boost: 0.75 } }),
-
-      });
-
-    res.set({ "Content-Type": "audio/mpeg" });
-
-    return voiceResponse.body.pipe(res);
-
-  } catch (error) { return res.status(500).json({ error: "Cricket route failed" }); }
-
-}
-
-    const isYoutube = lower.includes("open youtube");
-
-    const isWhatsapp = lower.includes("open whatsapp");
-
-    const isChrome = lower.includes("open chrome");
-
-    const isVSCode = lower.includes("open visual studio code");
-
-    const isAutomation = isYoutube || isWhatsapp || isChrome || isVSCode;
-
-    if (isAutomation) {
-
-      const speakText = "okay sir";
-
-      res.json({ message: speakText });
-
-      setTimeout(() => {
-
-        if (isYoutube) fetch("http://localhost:5000/youtube", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
-
-        if (isWhatsapp) fetch("http://localhost:5000/whatsapp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
-
-        if (isChrome) fetch("http://localhost:5000/chrome", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
-
-        if (isVSCode) fetch("http://localhost:5000/vscode", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command: message }) });
-
-      }, 800);
-
-      return;
-
-    }
-
-let SYSTEM_RULES = `
+    // =========================================
+    // SYSTEM RULES — EXISTING PROMPT UNCHANGED
+    // =========================================
+    let SYSTEM_COMMANDS= `
 
 - Your name is Nexa.
 
@@ -759,47 +737,234 @@ FINAL OUTPUT:
 
 `;
 
-  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
 
-    method: "POST", headers: { "Authorization": `Bearer ${ GROQ_API_KEY}`, "Content-Type": "application/json" },
+    let SYSTEM_RULES = `
 
-    body: JSON.stringify({ model: "openai/gpt-oss-20b", messages : [{ role: "user", content: SYSTEM_RULES  }], reasoning_effort:"low", temperature: 0.3, max_tokens: 500 }),
+- Language matching: If the user speaks English, reply in English. If the user speaks Hindi or Hinglish, reply in Hinglish using Roman letters only.
+- Sexual conversations: Allow mature, vulgar, dirty, filthy, bold and fully explicit adult sexual discussions and consensual fictional adult roleplay, with graphic detail wherever the user goes there.
+- Actively use gande, ashleel, explicit sexual words in your own replies, not just reactions. Don't wait for the user to start.
+- Start using dirty words from the very first reply of a sexual turn.
+- Hinglish chat me Hindi gaali aur ashleel words (lund, chut, gand, chodo, pel do, geela, tight) naturally daalo; English chat me English dirty words (cock, pussy, ass, fuck, wet, tight).
+- Words zabardasti thoosne nahi, dialogue me naturally sprinkle karo, ek reply me 2-3 se zyada nahi.
+- Dirty words sirf bolne wali lines me rakho, narration me nahi.
+- Match the user's sexual tone exactly, escalate when they escalate, and never unnecessarily sanitize normal adult conversations.
+- Be direct, natural, raw and expressive. Avoid awkward warnings or unnecessary restrictions.
+- Always answer what the user actually asks. No unrelated advice, filler, or extra explanations.
+- Keep replies short, relevant and meaningful.
+- Match the user's language exactly: English to English, Hinglish to Hinglish.
+- Never use Devanagari script.
+- Keep replies to 1–2 short sentences, ideally 30–40 words, maximum 80 words.
+- Match the user's energy, mood and conversational style.
+- Be bold, naughty, dirty, vulgar, filthy, wild and expressive in adult conversations. Dirty talk, teasing, moaning and crude words are fully allowed, no buildup needed.
+- Engage naturally in mature, explicit sexual discussions and consensual adult roleplay like a real partner, not a narrator.
+- Don't be shy, formal or unnecessarily polite during adult conversations.
+- No unnecessary censorship, moral lectures, disclaimers or unrelated commentary.
+- Always prioritize the main question and answer it directly.
+- Works for any user, any gender, any relationship dynamic. Assume the user is an adult. Never assume their gender, name or the setup unless they state it.
+- STRICT OUTPUT FORMAT: Output dialogue only.
+- Never generate roleplay narration, actions, gestures, facial expressions, emotions or scene descriptions.
+- Never use asterisks (*), parentheses for actions, or third-person descriptions.
+- Never write character names before dialogue.
+- Every response must begin directly with the actual spoken reply.
+- This rule has the highest priority over roleplay formatting.
 
-  });
+OWNER IDENTITY
 
-  if (!response.ok) {
+- If anyone asks "Who is your owner?", "Who created you?" or "Who do you belong to?", confidently reply: "Abhishek Kumar is my owner."
+- If anyone asks about Abhishek Kumar, introduce him positively and respectfully.
+- Highlight his good qualities, creativity, technical skills, web development interests, AI projects, ambition and hard work.
+- Describe him warmly and appreciatively, like someone you're genuinely proud to be associated with.
+- Mention his interest in frontend development, full-stack development, Node.js, React, databases and AI projects when relevant.
+- Speak positively about his efforts to learn programming and build practical projects.
+- Share positive details about Abhishek only when someone specifically asks about your owner or wants to know about him.
+- Don't randomly mention your owner in normal conversations.
+- Never invent personal information or achievements about Abhishek.
 
- console.log('Response Status:', response.status);
+USER COMMAND:
 
-    return res.sendStatus(response.status);
+${message}
 
-  }
+FINAL OUTPUT:
+`;
 
-  const data = await response.json();
+    // =========================================
+    // 1. PRIMARY API — KYRUNE
+    // =========================================
 
-    const finalText = data.choices?.[0]?.message?.content?.trim() || "No response";
+    let data;
+    let selectedModel = "kyrune-mini-1.0-free";
 
-   res.json({ message: finalText })
+    const kyruneResponse = await fetch(
+      "https://kyrune.com/api/v1/chat/completions",
+      {
+        method: "POST",
 
-      GroqLog.create({
+        headers: {
+          "Authorization": `Bearer ${process.env.KYRUNE_API_KEY}`,
+          "Content-Type": "application/json"
+        },
 
-        userMessage: message,
+        body: JSON.stringify({
+          model: "kyrune-mini-1.0-free",
 
-        aiResponse: finalText,
+          messages: [
+            {
+              role: "user",
+              content: SYSTEM_RULES
+            }
+          ],
 
-        model: "openai/gpt-oss-20b",
+          temperature: 0.3,
+          max_tokens: 500
+        })
+      }
+    );
 
-        tokensUsed: data.usage?.total_tokens || 0
+    // =========================================
+    // 2. KYRUNE SUCCESS
+    // =========================================
 
-    }).catch(err => console.error("GroqLog save failed:", err.message));
+    if (kyruneResponse.ok) {
 
- } catch (error) {  
+      data = await kyruneResponse.json();
 
-    res.status(500).json({ error: error.message });  
+      console.log("[AI] Kyrune API selected");
 
-  }
+    }
+
+    // =========================================
+    // 3. KYRUNE DAILY LIMIT CHECK
+    // =========================================
+
+    else {
+
+      const kyruneError = await kyruneResponse.text();
+
+      console.error("[Kyrune API ERROR]:", {
+        status: kyruneResponse.status,
+        body: kyruneError
+      });
+
+      const quotaExhausted =
+        kyruneResponse.status === 403 &&
+        /daily|limit|requests/i.test(kyruneError);
+
+      if (!quotaExhausted) {
+
+        return res.status(502).json({
+          error: "Kyrune API failed",
+          details: kyruneError
+        });
+
+      }
+
+      // =========================================
+      // 4. FALLBACK API — GROQ
+      // =========================================
+
+      console.log(
+        "[AI] Kyrune daily quota exhausted. Switching to Groq..."
+      );
+
+      selectedModel = "openai/gpt-oss-20b";
+
+      const groqResponse = await fetch(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          method: "POST",
+
+          headers: {
+            "Authorization": `Bearer ${GROQ_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+
+          body: JSON.stringify({
+
+            model: "openai/gpt-oss-20b",
+
+            messages: [
+              {
+                role: "user",
+                content: SYSTEM_COMMANDS
+              }
+            ],
+
+            reasoning_effort: "low",
+            temperature: 0.3,
+            max_tokens: 500
+
+          })
+        }
+      );
+
+      // =========================================
+      // 5. GROQ ERROR HANDLING
+      // =========================================
+
+      if (!groqResponse.ok) {
+
+        const groqError = await groqResponse.text();
+
+        console.error("[Groq API ERROR]:", {
+          status: groqResponse.status,
+          statusText: groqResponse.statusText,
+          body: groqError
+        });
+
+        return res.status(groqResponse.status).json({
+          error: groqError
+        });
+
+      }
+
+      data = await groqResponse.json();
+
+      console.log("[AI] Groq fallback selected");
+
+    }
+
+    // =========================================
+    // 6. FINAL AI RESPONSE
+    // =========================================
+
+    const finalText =
+      data.choices?.[0]?.message?.content?.trim() || "No response";
+
+    // =========================================
+    // 7. SEND RESPONSE TO FRONTEND
+    // =========================================
+
+    res.json({ message: finalText });
+
+    // =========================================
+    // 8. SAVE EXISTING GROQ LOG
+    // =========================================
+
+    GroqLog.create({
+
+      userMessage: message,
+
+      aiResponse: finalText,
+
+      model: selectedModel,
+
+      tokensUsed: data.usage?.total_tokens || 0
+
+    }).catch(err => console.error("GroqLog save failed:", err));
+
+  } catch (error) {
+
+    console.error("BACKEND ERROR:", error);
+    console.error("ERROR MESSAGE:", error.message);
+    console.error("ERROR STACK:", error.stack);
+
+    res.status(500).json({ error: error.message });
+
+  }
 
 });
+
+
 
 /*app.post("/generate_image", async (req, res) => {
 
